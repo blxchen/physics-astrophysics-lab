@@ -82,7 +82,7 @@ export function createGlobe(canvas, state) {
   stormGroup.add(halo);
   let scenario = state.scenario, model = null, mode = 'typhoon', layer = 'satellite', hour = 0;
   const fieldData = { wind: null, ocean: null };
-  let trackLine, windPoints;
+  let trackLine, windPoints, cloudBands;
 
   function clearObject(obj) {
     if (!obj) return;
@@ -131,6 +131,40 @@ export function createGlobe(canvas, state) {
     const material = new THREE.PointsMaterial({ color: 0x9cf6da, size: .012, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false });
     windPoints = new THREE.Points(geometry, material);
     stormGroup.add(windPoints);
+  }
+  function rebuildCloudBands() {
+    clearObject(cloudBands);
+    const positions = [];
+    const colors = [];
+    const rmax = Number(document.getElementById('radiusMax').value) || 38;
+    const center = trackData()[clamp(Math.round(hour / 3), 0, trackData().length - 1)];
+    const sign = center.latitude >= 0 ? 1 : -1;
+    // A schematic raised canopy: six logarithmic spiral arms with a clear eye.
+    // Geometry follows the selected Rmax; NASA imagery remains the observed layer.
+    for (let arm = 0; arm < 6; arm++) {
+      for (let j = 0; j < 175; j++) {
+        const u = j / 174;
+        const radiusKm = rmax * (.78 + 7.2 * u);
+        const spiral = sign * (arm * Math.PI / 3 + 4.9 * u);
+        for (let strand = 0; strand < 3; strand++) {
+          const jitter = Math.sin(j * 12.9898 + arm * 78.233 + strand * 31.17);
+          const angle = spiral + (strand - 1) * .045 + jitter * .014;
+          const radius = radiusKm * (1 + .027 * jitter);
+          const lat = center.latitude + Math.sin(angle) * radius / 111.2;
+          const lon = center.longitude + Math.cos(angle) * radius / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
+          const altitude = .034 + .018 * Math.exp(-(((u - .18) / .3) ** 2)) + strand * .002;
+          const p = point(lat, lon, altitude);
+          positions.push(p.x, p.y, p.z);
+          const brightness = .54 + .34 * Math.exp(-(((u - .17) / .34) ** 2)) + .05 * jitter;
+          colors.push(brightness, brightness * 1.035, brightness * 1.055);
+        }
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    cloudBands = new THREE.Points(geometry, new THREE.PointsMaterial({ vertexColors: true, size: .017, sizeAttenuation: true, transparent: true, opacity: .48, depthWrite: false }));
+    stormGroup.add(cloudBands);
   }
   function updateWind(t) {
     if (!windPoints || !state.windTrails || mode !== 'typhoon') return;
@@ -186,7 +220,7 @@ export function createGlobe(canvas, state) {
   function setFieldData(kind, points) { fieldData[kind] = points; buildGlobalField(); }
   function setStorm(next, nextModel = null, shouldFocus = true) {
     scenario = next; model = nextModel;
-    rebuildTrack(); rebuildPressure(); rebuildWind();
+    rebuildTrack(); rebuildPressure(); rebuildWind(); rebuildCloudBands();
     if (shouldFocus) focus(next.lat, next.lon);
   }
   function focus(lat, lon) {
@@ -202,7 +236,7 @@ export function createGlobe(canvas, state) {
     fieldGroup.visible = mode === 'winds' || mode === 'ocean' || layer === 'winds';
     buildGlobalField();
   }
-  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); }
+  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); rebuildCloudBands(); }
   function setTrack(enabled) { if (trackLine) trackLine.visible = enabled; }
   function setWind(enabled) { if (windPoints) windPoints.visible = enabled; }
   function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.6); controls.update(); }
@@ -226,6 +260,7 @@ export function createGlobe(canvas, state) {
     halo.scale.setScalar(1 + .16 * Math.sin(t * .003));
     if (trackLine) trackLine.visible = state.track;
     if (windPoints) windPoints.visible = state.windTrails;
+    if (cloudBands) cloudBands.visible = layer === 'satellite';
     updateWind(t);
     fieldGroup.rotation.y = 0;
     renderer.render(scene, camera);

@@ -12,11 +12,12 @@ npm ci
 npm run dev
 ```
 
-Open the Vite URL, usually `http://localhost:5173`. The Python API runs at `http://localhost:8000`. The frontend continues with a browser implementation of the same equations when the API is unavailable, and marks that fallback in the UI.
+Open the Vite URL, usually `http://localhost:5173`. The Python API runs at `http://localhost:8000`. On GitHub Pages, custom parameters run through the same `backend/physics.py` module in a browser Web Worker using Pyodide. A JavaScript equation fallback is shown only if the Python runtime cannot load.
 
 ```sh
 python -m unittest backend.test_physics -v
 npm run build
+python -m backend.cli --parameters storm.json --output result.json
 ```
 
 ## Physics
@@ -33,7 +34,7 @@ f = 2 Ω sin(latitude)
 
 `Δp` is in pascals, `ρ = 1.15 kg/m³`, and `Ω = 7.2921159 × 10⁻⁵ rad/s`. The 0.9 surface reduction is an explicit simplifying assumption. `B` is inferred from the requested maximum wind and pressure deficit at `R`; if it falls outside 0.5–3.5, the model limits it and marks the result. Surface vectors use cyclonic rotation and an assumed 18° inward crossing angle. The eye is calm at the exact center in this axisymmetric model.
 
-The timeline moves the center along a spherical great circle at **constant user-set speed and heading**. It is a scenario path, never an official track forecast. Sea temperature is displayed as context; this model does not include a thermodynamic intensity equation or derive wind from sea temperature. It also lacks land interaction, vertical structure, asymmetry, eyewall replacement, rainfall dynamics, and bathymetry. Wind particles visualize the radial profile with angular rate `V/r`, shown at 25× time for visibility; they are not a full numerical fluid simulation.
+The timeline moves the center along a spherical great circle at **constant user-set speed and heading**. It is a scenario path, never an official track forecast. Sea temperature is displayed as context; this model does not include a thermodynamic intensity equation or derive wind from sea temperature. It also lacks land interaction, vertical structure, asymmetry, eyewall replacement, rainfall dynamics, and bathymetry. Wind particles visualize the radial profile with angular rate `V/r`, shown at 25× time for visibility; they are not a full numerical fluid simulation. Raised, translucent spiral cloud bands use the selected radius of maximum wind for an illustrative 3D canopy; their shape is not a retrieved cloud observation. The Earth backdrop is the sourced satellite image.
 
 The economic panel only produces a number after the user supplies an exposed-asset value. It uses the disclosed sensitivity curve:
 
@@ -58,7 +59,7 @@ This experiment is for exploration and education. Use official meteorological ag
 
 ## Deployment
 
-The [GitHub Pages workflow](.github/workflows/pages.yml) runs the Python tests and [`build_snapshot.py`](backend/build_snapshot.py), builds the Vite frontend, and deploys it from `main`. It refreshes the snapshot hourly; every published snapshot includes its generation time. GitHub Pages does not execute Python on requests, so custom parameter changes use the same documented equations in the browser. The default presets use Python-calculated snapshot results. NHC and global vector data on Pages can be delayed by Actions scheduling or source latency.
+The [GitHub Pages workflow](.github/workflows/pages.yml) runs the Python tests and [`build_snapshot.py`](backend/build_snapshot.py), builds the Vite frontend, and deploys it from `main`. It refreshes the snapshot hourly; every published snapshot includes its generation time. GitHub Pages cannot execute a Python server, so custom parameter changes load the pinned [Pyodide](https://pyodide.org/en/stable/usage/working-with-bundlers.html) runtime and run the actual Python physics module inside a browser worker. First use downloads the runtime from jsDelivr and may take several seconds. The default presets use Python-calculated snapshot results. NHC and global vector data on Pages can be delayed by Actions scheduling or source latency.
 
 For immediate Python calculations, the optional [Render Blueprint](render.yaml) deploys `backend.server` on a free Python web service. Once it has a public URL, add repository variable `PAL_API_BASE` with that URL and rerun the Pages workflow. Render's free service may sleep after inactivity; the snapshot and browser equation fallback keep the UI usable. The site does not require Render to publish.
 

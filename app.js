@@ -20,6 +20,32 @@ let simulationTimer = 0;
 let simulationRequest = 0;
 const fieldCache = {};
 let snapshot = null;
+let pythonWorker;
+const pythonPending = new Map();
+let pythonJob = 0;
+
+function browserPython(parameters) {
+  if (!pythonWorker) {
+    pythonWorker = new Worker(new URL('./python-worker.js', import.meta.url), { type: 'module' });
+    pythonWorker.onmessage = ({ data }) => {
+      const pending = pythonPending.get(data.id);
+      if (!pending) return;
+      pythonPending.delete(data.id);
+      clearTimeout(pending.timer);
+      data.error ? pending.reject(new Error(data.error)) : pending.resolve(data.result);
+    };
+    pythonWorker.onerror = () => {
+      for (const pending of pythonPending.values()) { clearTimeout(pending.timer); pending.reject(new Error('Python worker unavailable')); }
+      pythonPending.clear(); pythonWorker.terminate(); pythonWorker = null;
+    };
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++pythonJob;
+    const timer = setTimeout(() => { pythonPending.delete(id); reject(new Error('Python load timed out')); }, 45000);
+    pythonPending.set(id, { resolve, reject, timer });
+    pythonWorker.postMessage({ id, parameters });
+  });
+}
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function formatCoord(lat, lon) { return `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'} · ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? 'E' : 'W'}`; }
@@ -134,6 +160,10 @@ async function runSimulation() {
   const preset = snapshot?.presets?.[state.scenario.id];
   if (!model && preset && Object.entries(data).every(([key, value]) => Math.abs(value - (preset.inputs?.[key] ?? NaN)) < 1e-8)) {
     model = preset; source = 'PYTHON ACTIONS SNAPSHOT';
+  }
+  if (!model) {
+    try { model = await browserPython(data); source = 'PYTHON IN BROWSER'; }
+    catch { source = 'BROWSER EQUATION FALLBACK'; }
   }
   if (request !== simulationRequest) return;
   state.model = model || localSimulation(data); state.modelSource = source;
