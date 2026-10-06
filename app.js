@@ -14,7 +14,7 @@ const experimentMeta = {
   ocean: ['Ocean currents', 'Explore illustrative heat-transport paths.', 'Ocean circulation'],
   clouds: ['Cloud systems', 'Explore daily satellite cloud cover.', 'Cloud cover']
 };
-const state = { scenario: scenarios[0], experiment: 'typhoon', tab: 'simulation', layer: 'satellite', hour: 0, playing: false, windTrails: true, track: true, observed: null, weatherSeries: null, obsStatus: 'loading', model: null, modelSource: 'pending' };
+const state = { scenario: scenarios[0], experiment: 'typhoon', tab: 'simulation', layer: 'satellite', hour: 0, playing: false, playbackSpeed: 1, windTrails: true, track: true, observed: null, weatherSeries: null, weatherStart: 0, obsStatus: 'loading', model: null, modelSource: 'pending' };
 const globe = createGlobe($('globeCanvas'), state);
 let simulationTimer = 0;
 let simulationRequest = 0;
@@ -71,8 +71,7 @@ function renderScenarios() {
 function selectScenario(id) {
   const s = scenarios.find(x => x.id === id);
   if (!s) return;
-  state.scenario = s; state.hour = 0; state.model = null;
-  $('timeline').value = 0; $('timelineStamp').textContent = 'HOUR 00 / 72';
+  state.scenario = s; state.model = null; setHour(0);
   $('stormName').textContent = s.name;
   $('stormType').textContent = `${s.type} · ${s.region}${s.live ? ' · NHC initial conditions' : ''}`;
   $('sceneTitle').textContent = s.region;
@@ -105,12 +104,13 @@ function setTab(tab) {
 
 async function fetchWeather() {
   const s = state.scenario; state.observed = null; state.weatherSeries = null; state.obsStatus = 'loading'; updateDataStatus();
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${s.lat}&longitude=${s.lon}&hourly=temperature_2m,relative_humidity_2m,precipitation,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m&forecast_days=2&timezone=UTC`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${s.lat}&longitude=${s.lon}&hourly=temperature_2m,relative_humidity_2m,precipitation,cloud_cover,pressure_msl,wind_speed_10m,wind_gusts_10m,wind_direction_10m&forecast_days=3&timezone=UTC`;
   try {
     const response = await fetch(url); if (!response.ok) throw new Error('Weather service unavailable');
     const data = await response.json(); if (s !== state.scenario) return;
     const now = new Date(), hour = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString().slice(0, 16);
     let i = data.hourly.time.findIndex(t => t === hour); if (i < 0) i = 0;
+    state.weatherStart = i;
     state.observed = { time: data.hourly.time[i], temperature: data.hourly.temperature_2m[i], humidity: data.hourly.relative_humidity_2m[i], rain: data.hourly.precipitation[i], cloud: data.hourly.cloud_cover[i], pressure: data.hourly.pressure_msl[i], wind: data.hourly.wind_speed_10m[i] };
     state.weatherSeries = data.hourly;
     state.obsStatus = 'live';
@@ -133,18 +133,30 @@ function localSimulation(p) {
   const dp = (p.ambient_pressure_hpa - p.central_pressure_hpa) * 100, rmax = p.radius_max_wind_km * 1000;
   const f = Math.abs(2 * 7.2921159e-5 * Math.sin(p.latitude * RAD)), vg = p.maximum_wind_kmh / 3.6 / .9;
   const inferred = 1.15 * Math.E * (vg * vg + f * rmax * vg) / dp, b = clamp(inferred, .5, 3.5);
-  const radii = [0, 2, 5, 10, 15, 20, 25, 30, 38, 45, 55, 70, 90, 120, 160, 220, 300, 400, 500];
+  const windAt = radiusKm => {
+    if (!radiusKm) return 0;
+    const r = radiusKm * 1000, x = (p.radius_max_wind_km / radiusKm) ** b;
+    return .9 * (Math.sqrt(Math.max(0, b * dp / 1.15 * x * Math.exp(-x) + (f * r / 2) ** 2)) - f * r / 2);
+  };
+  const radii = [...new Set([0, 2, p.radius_max_wind_km, ...Array.from({ length: 100 }, (_, i) => (i + 1) * 5)])].sort((a, b) => a - b);
   const radial_profile = radii.map(radius_km => {
-    if (!radius_km) return { radius_km, wind_kmh: 0, pressure_hpa: p.central_pressure_hpa };
-    const r = radius_km * 1000, x = (p.radius_max_wind_km / radius_km) ** b;
-    const pressure_hpa = p.central_pressure_hpa + (p.ambient_pressure_hpa - p.central_pressure_hpa) * Math.exp(-x);
-    const wind_kmh = .9 * (Math.sqrt(Math.max(0, b * dp / 1.15 * x * Math.exp(-x) + (f * r / 2) ** 2)) - f * r / 2) * 3.6;
-    return { radius_km, wind_kmh: +wind_kmh.toFixed(2), pressure_hpa: +pressure_hpa.toFixed(2) };
+    const x = radius_km ? (p.radius_max_wind_km / radius_km) ** b : 0, wind = windAt(radius_km);
+    const pressure_hpa = radius_km ? p.central_pressure_hpa + (p.ambient_pressure_hpa - p.central_pressure_hpa) * Math.exp(-x) : p.central_pressure_hpa;
+    const delta = radius_km ? Math.min(.5, radius_km / 2) : 0;
+    const vorticity = radius_km ? ((radius_km + delta) * windAt(radius_km + delta) - (radius_km - delta) * windAt(radius_km - delta)) / (2 * delta * radius_km * 1000) : 0;
+    return { radius_km, wind_kmh: +(wind * 3.6).toFixed(2), pressure_hpa: +pressure_hpa.toFixed(2), pressure_gradient_pa_km: +(radius_km ? dp * Math.exp(-x) * b * x / radius_km : 0).toFixed(2), wind_energy_j_m3: +(.575 * wind * wind).toFixed(2), wind_power_w_m2: +(.575 * wind ** 3).toFixed(2), vorticity_1e5_s: +((p.latitude >= 0 ? 1 : -1) * vorticity * 1e5).toFixed(3) };
   });
   const track = Array.from({ length: 25 }, (_, i) => { const hour = i * 3, [latitude, longitude] = localDestination(p.latitude, p.longitude, p.heading_deg, p.translation_kmh * hour); return { hour, latitude, longitude }; });
   const peak_profile_wind_kmh = Math.max(...radial_profile.map(x => x.wind_kmh));
   const excess = Math.max(0, peak_profile_wind_kmh - 90), loss_fraction = .35 * (1 - Math.exp(-((excess / 100) ** 3)));
-  return { radial_profile, track, shape_parameter_b: b, shape_parameter_limited: Math.abs(b - inferred) > 1e-9, peak_profile_wind_kmh, loss: p.exposed_assets_usd ? { status: 'illustrative', estimated_loss_usd: p.exposed_assets_usd * loss_fraction, loss_fraction } : { status: 'exposure_required', estimated_loss_usd: null, loss_fraction: null } };
+  const radiusFor = threshold => { for (let i = radial_profile.length - 1; i > 0; i--) { const outer = radial_profile[i], inner = radial_profile[i - 1]; if (inner.wind_kmh >= threshold && outer.wind_kmh < threshold) return +(outer.radius_km + (threshold - outer.wind_kmh) / (inner.wind_kmh - outer.wind_kmh) * (inner.radius_km - outer.radius_km)).toFixed(1); } return null; };
+  const azimuthal_profile = Array.from({ length: 73 }, (_, i) => {
+    const bearing_deg = i * 5, angle = bearing_deg * RAD, east = Math.sin(angle), north = Math.cos(angle), sign = p.latitude >= 0 ? 1 : -1, v = windAt(p.radius_max_wind_km), crossing = 18 * RAD, motion = .5 * p.translation_kmh / 3.6;
+    const u = -sign * v * Math.cos(crossing) * north - v * Math.sin(crossing) * east + motion * Math.sin(p.heading_deg * RAD);
+    const y = sign * v * Math.cos(crossing) * east - v * Math.sin(crossing) * north + motion * Math.cos(p.heading_deg * RAD);
+    return { bearing_deg, wind_kmh: +(Math.hypot(u, y) * 3.6).toFixed(2) };
+  });
+  return { radial_profile, track, azimuthal_profile, wind_radii_km: { '34kt': radiusFor(34 * 1.852), '50kt': radiusFor(50 * 1.852), '64kt': radiusFor(64 * 1.852) }, shape_parameter_b: b, shape_parameter_limited: Math.abs(b - inferred) > 1e-9, peak_profile_wind_kmh, loss: p.exposed_assets_usd ? { status: 'illustrative', estimated_loss_usd: p.exposed_assets_usd * loss_fraction, loss_fraction } : { status: 'exposure_required', estimated_loss_usd: null, loss_fraction: null } };
 }
 function scheduleSimulation() { clearTimeout(simulationTimer); simulationTimer = setTimeout(runSimulation, 160); }
 async function runSimulation() {
@@ -222,50 +234,148 @@ function renderAnalysis() {
   const loss = m?.loss;
   $('damageEstimate').textContent = loss?.estimated_loss_usd != null ? `$${(loss.estimated_loss_usd / 1e9).toFixed(2)}B` : '—';
   $('impactBars').innerHTML = loss?.loss_fraction != null ? `<div class="impact-bar"><div><span>Assumed exposure</span><span>$${(v.assets / 1e9).toFixed(2)}B</span></div><div><i style="width:100%"></i></div></div><div class="impact-bar"><div><span>Wind vulnerability fraction</span><span>${(loss.loss_fraction * 100).toFixed(1)}%</span></div><div><i style="width:${loss.loss_fraction * 100}%"></i></div></div>` : '<span class="impact-empty">Enter exposed assets to calculate a sensitivity value.</span>';
+  $('windRadii').innerHTML = ['34kt', '50kt', '64kt'].map(key => `<span><strong>${key}</strong> ${m?.wind_radii_km?.[key] == null ? '—' : `${m.wind_radii_km[key]} km`}</span>`).join('');
   drawChart();
 }
-function drawChart() {
-  const c = $('chartCanvas'); if (state.tab !== 'analysis' || !c) return;
-  const rect = c.getBoundingClientRect(); if (!rect.width) return;
-  const dpr = clamp(window.devicePixelRatio || 1, 1, 2); c.width = rect.width * dpr; c.height = rect.height * dpr;
-  const g = c.getContext('2d'); g.scale(dpr, dpr);
-  const w = rect.width, h = rect.height, L = 42, R = 12, T = 15, B = 18, key = $('chartMetric').value;
-  const weather = key.startsWith('weather_');
-  $('chartSource').textContent = weather ? 'OPEN-METEO HOURLY FORECAST' : 'RADIAL WIND MODEL';
-  $('chartTitle').textContent = weather ? 'Nearby weather forecast' : 'Storm structure';
-  $('chartAxis').innerHTML = weather ? '<span>NOW</span><span>+24 HRS</span><span>+48 HRS</span>' : '<span>0 KM</span><span>250 KM</span><span>500 KM</span>';
-  const sourceKey = { weather_wind: 'wind_speed_10m', weather_pressure: 'pressure_msl', weather_rain: 'precipitation' }[key];
-  const rows = weather ? (state.weatherSeries?.[sourceKey] || []).slice(0, 48).map((value, i) => ({ radius_km: i / 47 * 500, value })) : (state.model?.radial_profile || []).map(row => ({ ...row, value: row[key] }));
-  g.clearRect(0, 0, w, h);
-  if (!rows.length) { g.fillStyle = '#8ca9b4'; g.font = '12px DM Sans'; g.fillText(weather ? 'Weather feed unavailable' : 'Calculating model profile', 18, h / 2); return; }
-  const vals = rows.map(x => x.value), min = Math.min(...vals), max = Math.max(...vals), span = Math.max(1, max - min);
-  g.clearRect(0, 0, w, h); g.font = '9px DM Sans'; g.fillStyle = '#7897a5'; g.strokeStyle = '#274557'; g.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) { const y = T + i * (h - T - B) / 4; g.beginPath(); g.moveTo(L, y); g.lineTo(w - R, y); g.stroke(); g.fillText((max - i * span / 4).toFixed(key === 'pressure_hpa' ? 0 : 1), 2, y + 3); }
-  const xOf = row => L + row.radius_km / 500 * (w - L - R), yOf = row => T + (max - row.value) / span * (h - T - B);
-  const fill = g.createLinearGradient(0, T, 0, h - B); fill.addColorStop(0, '#61deca55'); fill.addColorStop(1, '#61deca00');
-  g.beginPath(); rows.forEach((row, i) => i ? g.lineTo(xOf(row), yOf(row)) : g.moveTo(xOf(row), yOf(row))); g.lineTo(w - R, h - B); g.lineTo(L, h - B); g.closePath(); g.fillStyle = fill; g.fill();
-  g.beginPath(); rows.forEach((row, i) => i ? g.lineTo(xOf(row), yOf(row)) : g.moveTo(xOf(row), yOf(row))); g.strokeStyle = '#8cebd3'; g.lineWidth = 2.5; g.stroke();
-  if (!weather) { const rmX = L + controls().rmax / 500 * (w - L - R); g.setLineDash([4, 5]); g.beginPath(); g.moveTo(rmX, T); g.lineTo(rmX, h - B); g.strokeStyle = '#f2b78099'; g.lineWidth = 1; g.stroke(); g.setLineDash([]); }
+const chartSpecs = {
+  wind_kmh: ['Surface wind', 'km/h', 'radial'], pressure_hpa: ['Pressure', 'hPa', 'radial'],
+  pressure_gradient_pa_km: ['Pressure gradient', 'Pa/km', 'radial'], wind_energy_j_m3: ['Wind energy density', 'J/m³', 'radial'],
+  wind_power_w_m2: ['Wind energy flux', 'W/m²', 'radial'], vorticity_1e5_s: ['Relative vorticity', '10⁻⁵ s⁻¹', 'radial'],
+  azimuthal_wind: ['Eyewall wind by bearing', 'km/h', 'azimuth'],
+  track_latitude: ['Scenario track latitude', '°', 'track', 'latitude'],
+  track_longitude: ['Scenario track longitude', '°', 'track', 'longitude'],
+  track_distance: ['Scenario travel distance', 'km', 'track', 'distance'],
+  loss_fraction: ['Wind vulnerability curve', '%', 'impact'],
+  loss_usd: ['Assumed dollar loss curve', 'USD', 'impact'],
+  weather_wind: ['Nearby forecast wind', 'km/h', 'weather', 'wind_speed_10m'],
+  weather_gust: ['Nearby forecast gust', 'km/h', 'weather', 'wind_gusts_10m'],
+  weather_direction: ['Nearby wind direction', '° from north', 'weather', 'wind_direction_10m'],
+  weather_pressure: ['Nearby forecast pressure', 'hPa', 'weather', 'pressure_msl'],
+  weather_rain: ['Nearby forecast rain', 'mm/h', 'weather', 'precipitation'],
+  weather_temp: ['Nearby air temperature', '°C', 'weather', 'temperature_2m'],
+  weather_humidity: ['Nearby humidity', '%', 'weather', 'relative_humidity_2m'],
+  weather_cloud: ['Nearby cloud cover', '%', 'weather', 'cloud_cover']
+};
+function chartData(key) {
+  const spec = chartSpecs[key]; if (!spec) return null;
+  const [title, unit, type, field] = spec;
+  let rows = [];
+  if (type === 'radial') rows = (state.model?.radial_profile || []).map(p => ({ x: p.radius_km, value: p[key] }));
+  if (type === 'azimuth') rows = (state.model?.azimuthal_profile || []).map(p => ({ x: p.bearing_deg, value: p.wind_kmh }));
+  if (type === 'track') rows = (state.model?.track || []).map(p => ({ x: p.hour, value: field === 'distance' ? controls().speed * p.hour : p[field] }));
+  if (type === 'impact') rows = Array.from({ length: 61 }, (_, i) => { const x = i * 5, fraction = .35 * (1 - Math.exp(-((Math.max(x - 90, 0) / 100) ** 3))); return { x, value: key === 'loss_fraction' ? fraction * 100 : controls().assets * fraction }; });
+  if (type === 'weather') rows = (state.weatherSeries?.[field] || []).slice(state.weatherStart, state.weatherStart + 49).map((value, x) => ({ x, value, valid_time_utc: state.weatherSeries.time?.[state.weatherStart + x] || '' }));
+  if (key === 'loss_usd' && !controls().assets) rows = [];
+  rows = rows.filter(p => Number.isFinite(p.value));
+  return { key, title, unit, type, source: type === 'weather' ? 'OPEN-METEO HOURLY FORECAST' : type === 'impact' ? 'ASSUMED EXPOSURE SENSITIVITY' : 'PYTHON HOLLAND-TYPE MODEL', xUnit: type === 'weather' || type === 'track' ? 'hour' : type === 'azimuth' ? 'degree' : type === 'impact' ? 'km/h' : 'km', maxX: type === 'weather' ? 48 : type === 'track' ? 72 : type === 'azimuth' ? 360 : type === 'impact' ? 300 : 500, rows };
 }
-function exportCsv() {
-  if (!state.model) return;
-  const csv = ['radius_km,wind_kmh,pressure_hpa', ...state.model.radial_profile.map(x => `${x.radius_km},${x.wind_kmh},${x.pressure_hpa}`)].join('\n');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `pal-${state.scenario.id}-radial-profile.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+function drawPlot(canvas, key) {
+  const data = chartData(key), rect = canvas.getBoundingClientRect(); if (!rect.width || !data) return;
+  const dpr = clamp(window.devicePixelRatio || 1, 1, 2), width = rect.width, height = rect.height;
+  canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  const g = canvas.getContext('2d'); g.scale(dpr, dpr);
+  const L = 47, R = 12, T = 16, B = 19, rows = data.rows;
+  g.clearRect(0, 0, width, height);
+  if (!rows.length) { g.fillStyle = '#8ca9b4'; g.font = '12px DM Sans'; g.fillText(data.type === 'weather' ? 'Weather feed unavailable' : 'Calculating Python model', 16, height / 2); return; }
+  const values = rows.map(p => p.value), min = Math.min(...values), max = Math.max(...values), span = Math.max(1, max - min);
+  const xOf = p => L + p.x / data.maxX * (width - L - R), yOf = p => T + (max - p.value) / span * (height - T - B);
+  g.font = '10px DM Sans'; g.fillStyle = '#86a4b3'; g.strokeStyle = '#29495b'; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) { const y = T + i * (height - T - B) / 4; g.beginPath(); g.moveTo(L, y); g.lineTo(width - R, y); g.stroke(); const tick = max - i * span / 4; g.fillText(Math.abs(tick) >= 10000 ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tick) : tick.toFixed(Math.abs(span) > 100 ? 0 : 1), 2, y + 3); }
+  g.strokeStyle = '#48728277'; g.lineWidth = 1.5; g.beginPath(); rows.forEach((p, i) => i ? g.lineTo(xOf(p), yOf(p)) : g.moveTo(xOf(p), yOf(p))); g.stroke();
+  const reveal = data.type === 'weather' || data.type === 'track' ? Math.min(data.maxX, state.hour) : data.maxX * state.hour / 72;
+  const played = rows.filter(p => p.x <= reveal);
+  const next = rows.find(p => p.x > reveal);
+  if (played.length && next && played[played.length - 1].x < reveal) {
+    const previous = played[played.length - 1], fraction = (reveal - previous.x) / (next.x - previous.x);
+    played.push({ x: reveal, value: previous.value + (next.value - previous.value) * fraction });
+  }
+  if (played.length) {
+    const fill = g.createLinearGradient(0, T, 0, height - B); fill.addColorStop(0, '#66e1ce55'); fill.addColorStop(1, '#66e1ce00');
+    g.beginPath(); played.forEach((p, i) => i ? g.lineTo(xOf(p), yOf(p)) : g.moveTo(xOf(p), yOf(p)));
+    g.lineTo(xOf(played[played.length - 1]), height - B); g.lineTo(xOf(played[0]), height - B); g.closePath(); g.fillStyle = fill; g.fill();
+    g.beginPath(); played.forEach((p, i) => i ? g.lineTo(xOf(p), yOf(p)) : g.moveTo(xOf(p), yOf(p))); g.strokeStyle = '#8cebd3'; g.lineWidth = 2.5; g.stroke();
+    const tip = played[played.length - 1]; g.beginPath(); g.arc(xOf(tip), yOf(tip), 4, 0, 2 * Math.PI); g.fillStyle = '#f1bc83'; g.fill();
+  }
+  if (data.type === 'radial') { const rmX = L + controls().rmax / 500 * (width - L - R); g.setLineDash([4, 5]); g.beginPath(); g.moveTo(rmX, T); g.lineTo(rmX, height - B); g.strokeStyle = '#f2b78099'; g.stroke(); g.setLineDash([]); }
+}
+function drawChart() {
+  if (state.tab !== 'analysis') return;
+  const key = $('chartMetric').value, data = chartData(key);
+  $('chartSource').textContent = data.source;
+  $('chartTitle').textContent = `${data.title} · ${data.unit}`;
+  $('chartAxis').innerHTML = `<span>0 ${data.xUnit.toUpperCase()}</span><span>${data.maxX / 2} ${data.xUnit.toUpperCase()}</span><span>${data.maxX} ${data.xUnit.toUpperCase()}</span>`;
+  drawPlot($('chartCanvas'), key);
+  for (const [id, metric] of [['miniWind', 'wind_kmh'], ['miniPressure', 'pressure_hpa'], ['miniPower', 'wind_power_w_m2'], ['miniWeather', 'weather_wind']]) drawPlot($(id), metric);
+}
+function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
+function exportCsv(key = $('chartMetric').value) {
+  const data = chartData(key); if (!data?.rows.length) return;
+  const csv = [`# ${data.title}; source=${data.source}; playback_hour=${state.hour.toFixed(2)}`, `x_${data.xUnit},value_${data.unit},valid_time_utc`, ...data.rows.map(p => `${p.x},${p.value},${p.valid_time_utc || ''}`)].join('\n');
+  downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `pal-${state.scenario.id}-${key}.csv`);
+}
+function exportAllCsv() {
+  const csv = ['series,source,x,x_unit,value,value_unit,valid_time_utc'];
+  for (const key of Object.keys(chartSpecs)) { const data = chartData(key); for (const p of data.rows) csv.push(`${key},${data.source},${p.x},${data.xUnit},${p.value},${data.unit},${p.valid_time_utc || ''}`); }
+  downloadBlob(new Blob([csv.join('\n')], { type: 'text/csv;charset=utf-8' }), `pal-${state.scenario.id}-all-data.csv`);
+}
+function exportPng(canvas, key) {
+  if (!canvas.width) return;
+  const data = chartData(key), dpr = clamp(window.devicePixelRatio || 1, 1, 2), header = Math.round(76 * dpr);
+  const output = document.createElement('canvas'); output.width = canvas.width; output.height = canvas.height + header;
+  const g = output.getContext('2d'); g.fillStyle = '#091c2c'; g.fillRect(0, 0, output.width, output.height);
+  g.scale(dpr, dpr); g.fillStyle = '#dff7f1'; g.font = 'bold 17px Space Grotesk, sans-serif'; g.fillText(`${state.scenario.name} · ${data.title}`, 18, 30);
+  g.fillStyle = '#82aaba'; g.font = '11px DM Sans, sans-serif'; g.fillText(`${data.source} · ${data.unit} by ${data.xUnit} · playback ${state.hour.toFixed(1)} h`, 18, 52);
+  g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(canvas, 0, header);
+  output.toBlob(blob => { if (blob) downloadBlob(blob, `pal-${state.scenario.id}-${key}.png`); }, 'image/png');
 }
 
 document.querySelectorAll('[data-experiment]').forEach(b => b.onclick = () => setExperiment(b.dataset.experiment));
 document.querySelectorAll('.view-tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 document.querySelectorAll('.rail-button[data-layer]').forEach(b => b.onclick = () => setLayer(b.dataset.layer));
 for (const id of ['intensity', 'pressure', 'seaTemp', 'stormSpeed', 'radiusMax', 'assetExposure']) $(id).addEventListener('input', updateControls);
-$('chartMetric').onchange = drawChart; $('exportCsv').onclick = exportCsv;
+$('chartMetric').onchange = drawChart;
+$('exportCsv').onclick = () => exportCsv();
+$('exportAllCsv').onclick = exportAllCsv;
+$('exportPng').onclick = () => exportPng($('chartCanvas'), $('chartMetric').value);
+document.querySelectorAll('[data-chart-png]').forEach(button => button.onclick = () => {
+  const canvas = button.closest('.chart-card').querySelector('canvas');
+  exportPng(canvas, button.dataset.chartPng);
+});
 $('resetControls').onclick = () => { $('assetExposure').value = ''; setControls(state.scenario); };
 $('refreshData').onclick = () => { fetchWeather(); fetchLiveStorms(); };
 $('resetGlobe').onclick = () => globe.reset(); $('zoomIn').onclick = () => globe.zoom(-1); $('zoomOut').onclick = () => globe.zoom(1);
 for (const [id, key] of [['windToggle', 'windTrails'], ['trackToggle', 'track']]) $(id).onclick = () => { state[key] = !state[key]; $(id).classList.toggle('on', state[key]); $(id).setAttribute('aria-checked', String(state[key])); key === 'track' ? globe.setTrack(state[key]) : globe.setWind(state[key]); };
-$('timeline').oninput = () => { state.hour = +$('timeline').value; globe.setHour(state.hour); $('timelineStamp').textContent = `HOUR ${String(state.hour).padStart(2, '0')} / 72`; };
-$('playButton').onclick = () => { state.playing = !state.playing; $('playButton').textContent = state.playing ? 'Ⅱ' : '▶'; };
-setInterval(() => { if (state.playing) { state.hour = (state.hour + 1) % 73; $('timeline').value = state.hour; globe.setHour(state.hour); $('timelineStamp').textContent = `HOUR ${String(state.hour).padStart(2, '0')} / 72`; } }, 180);
+function setHour(value) {
+  state.hour = clamp(value, 0, 72);
+  $('timeline').value = state.hour; $('analysisTimeline').value = state.hour;
+  const stamp = `HOUR ${state.hour.toFixed(1).padStart(4, '0')} / 72`;
+  $('timelineStamp').textContent = stamp; $('analysisStamp').textContent = stamp;
+  globe.setHour(state.hour); drawChart();
+}
+function setPlaying(playing) {
+  state.playing = playing;
+  $('playButton').textContent = playing ? 'Ⅱ' : '▶';
+  $('analysisPlay').textContent = playing ? 'Ⅱ' : '▶';
+}
+$('timeline').oninput = () => setHour(+$('timeline').value);
+$('analysisTimeline').oninput = () => setHour(+$('analysisTimeline').value);
+$('playButton').onclick = () => setPlaying(!state.playing);
+$('analysisPlay').onclick = () => setPlaying(!state.playing);
+$('playbackSpeed').onchange = () => { state.playbackSpeed = +$('playbackSpeed').value; $('analysisSpeed').textContent = `${state.playbackSpeed}×`; };
+let lastPlaybackTick = performance.now();
+setInterval(() => {
+  const now = performance.now(), elapsed = Math.min(.25, (now - lastPlaybackTick) / 1000); lastPlaybackTick = now;
+  if (state.playing) setHour(state.hour + elapsed * 4 * state.playbackSpeed > 72 ? 0 : state.hour + elapsed * 4 * state.playbackSpeed);
+}, 80);
 $('newScenario').onclick = () => $('stormDialog').showModal(); $('closeDialog').onclick = () => $('stormDialog').close();
+$('randomScenario').onclick = () => {
+  const basins = [[18, 135, 'Western Pacific'], [20, -72, 'North Atlantic'], [15, 85, 'Bay of Bengal'], [-18, 115, 'South Indian Ocean']];
+  const [lat0, lon0, region] = basins[Math.floor(Math.random() * basins.length)];
+  const wind = Math.round(90 + Math.random() * 175), pressure = Math.round(clamp(1010 - .39 * wind + (Math.random() - .5) * 18, 890, 995));
+  const s = { id: `synthetic-${Date.now()}`, name: `Storm ${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`, region, type: 'Synthetic cyclone', lat: +(lat0 + (Math.random() - .5) * 9).toFixed(1), lon: +(lon0 + (Math.random() - .5) * 13).toFixed(1), wind, pressure, seaTemp: +(27 + Math.random() * 4).toFixed(1), speed: Math.round(8 + Math.random() * 27), rmax: Math.round(22 + Math.random() * 65), heading: Math.round(Math.random() * 360) };
+  scenarios.push(s); selectScenario(s.id);
+};
+$('eyewallFocus').onclick = () => { globe.focus(state.scenario.lat, state.scenario.lon); globe.zoom(-1); globe.zoom(-1); };
 $('stormForm').onsubmit = e => { e.preventDefault(); const name = $('customName').value.trim(), lat = +$('customLat').value, lon = +$('customLon').value; if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return; const s = { id: `custom-${Date.now()}`, name, region: 'Custom location', type: 'Custom storm', lat, lon, wind: 130, pressure: 970, seaTemp: 29, speed: 18, rmax: 40, heading: 315 }; scenarios.push(s); $('stormDialog').close(); $('stormForm').reset(); selectScenario(s.id); };
 function tickClock() { $('utcClock').textContent = new Date().toISOString().slice(11, 16) + ' UTC'; }
 tickClock(); setInterval(tickClock, 30000); window.addEventListener('resize', drawChart);

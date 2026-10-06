@@ -31,6 +31,26 @@ class PhysicsTests(unittest.TestCase):
         self.assertIsNone(result["loss"]["estimated_loss_usd"])
         self.assertEqual(len(result["track"]), 25)
 
+    def test_derived_profile_and_threshold_radii(self):
+        result = simulate(self.storm)
+        at_rmax = next(p for p in result["radial_profile"] if p["radius_km"] == 38)
+        self.assertAlmostEqual(at_rmax["wind_energy_j_m3"],
+                               0.5 * 1.15 * (at_rmax["wind_kmh"] / 3.6) ** 2, delta=0.1)
+        self.assertGreater(at_rmax["pressure_gradient_pa_km"], 0)
+        self.assertGreater(at_rmax["vorticity_1e5_s"], 0)
+        self.assertGreater(result["wind_radii_km"]["34kt"], result["wind_radii_km"]["64kt"])
+
+    def test_translation_creates_azimuthal_asymmetry(self):
+        result = simulate(self.storm)
+        winds = [p["wind_kmh"] for p in result["azimuthal_profile"]]
+        self.assertGreater(max(winds) - min(winds), 5)
+
+    def test_southern_hemisphere_vorticity_is_negative(self):
+        south = Storm.from_dict({"latitude": -18})
+        result = simulate(south)
+        at_rmax = next(p for p in result["radial_profile"] if p["radius_km"] == 38)
+        self.assertLess(at_rmax["vorticity_1e5_s"], 0)
+
     def test_invalid_nonfinite_input(self):
         with self.assertRaises(ValueError):
             Storm.from_dict({"maximum_wind_kmh": float("nan")})

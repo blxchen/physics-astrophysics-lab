@@ -56,7 +56,7 @@ export function createGlobe(canvas, state) {
   const observationWidth = Math.min(renderer.capabilities.maxTextureSize, window.innerWidth >= 1100 ? 4096 : 2048);
   const imageLabel = document.getElementById('imageryDate');
   let observationReady = false;
-  loader.load(nasaUrl('BlueMarble_NextGeneration', null, baseWidth), texture => {
+  loader.load(nasaUrl('BlueMarble_ShadedRelief', null, baseWidth), texture => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
     earth.material.map = texture;
@@ -113,7 +113,7 @@ export function createGlobe(canvas, state) {
   stormGroup.add(halo);
   let scenario = state.scenario, model = null, mode = 'typhoon', layer = 'satellite', hour = 0;
   const fieldData = { wind: null, ocean: null };
-  let trackLine, windPoints, cloudBands;
+  let trackLine, windPoints, windParticleState, lastWindTick = 0, cloudBands, cloudOrigin;
 
   function clearObject(obj) {
     if (!obj) return;
@@ -129,9 +129,16 @@ export function createGlobe(canvas, state) {
     if (model?.track?.length) return model.track;
     return Array.from({ length: 25 }, (_, i) => ({ hour: i * 3, latitude: scenario.lat + i * .25, longitude: scenario.lon - i * .4 }));
   }
+  function centerAtHour(h) {
+    const track = trackData(), index = clamp(Math.floor(h / 3), 0, track.length - 1), next = track[Math.min(index + 1, track.length - 1)];
+    const before = track[index], fraction = clamp((h - before.hour) / Math.max(1, next.hour - before.hour), 0, 1);
+    let lonDelta = next.longitude - before.longitude;
+    if (lonDelta > 180) lonDelta -= 360;
+    if (lonDelta < -180) lonDelta += 360;
+    return { latitude: before.latitude + (next.latitude - before.latitude) * fraction, longitude: before.longitude + lonDelta * fraction };
+  }
   function positionAtHour(h) {
-    const track = trackData(), i = clamp(Math.round(h / 3), 0, track.length - 1);
-    const p = track[i];
+    const p = centerAtHour(h);
     return point(p.latitude, p.longitude, .029);
   }
   function rebuildTrack() {
@@ -141,7 +148,7 @@ export function createGlobe(canvas, state) {
   }
   function rebuildPressure() {
     for (const child of [...pressureGroup.children]) clearObject(child);
-    const center = trackData()[clamp(Math.round(hour / 3), 0, trackData().length - 1)];
+    const center = centerAtHour(hour);
     for (const radiusKm of [45, 90, 150, 240, 350]) {
       const vertices = [];
       for (let i = 0; i <= 120; i++) {
@@ -155,8 +162,16 @@ export function createGlobe(canvas, state) {
   }
   function rebuildWind() {
     clearObject(windPoints);
-    const count = 1100;
+    const count = 1600;
     const positions = new Float32Array(count * 3);
+    windParticleState = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      const radius = 14 + 330 * Math.sqrt(((i * 977) % count) / count);
+      const angle = i * 2.3999632297;
+      windParticleState[i * 2] = radius * Math.cos(angle);
+      windParticleState[i * 2 + 1] = radius * Math.sin(angle);
+    }
+    lastWindTick = 0;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const material = new THREE.PointsMaterial({ color: 0x9cf6da, size: .012, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false });
@@ -168,7 +183,8 @@ export function createGlobe(canvas, state) {
     const positions = [];
     const colors = [];
     const rmax = Number(document.getElementById('radiusMax').value) || 38;
-    const center = trackData()[clamp(Math.round(hour / 3), 0, trackData().length - 1)];
+    const center = centerAtHour(hour);
+    cloudOrigin = center;
     const sign = center.latitude >= 0 ? 1 : -1;
     // A schematic raised canopy: six logarithmic spiral arms with a clear eye.
     // Geometry follows the selected Rmax; NASA imagery remains the observed layer.
@@ -200,19 +216,31 @@ export function createGlobe(canvas, state) {
   function updateWind(t) {
     if (!windPoints || !state.windTrails || mode !== 'typhoon') return;
     const arr = windPoints.geometry.attributes.position.array;
-    const track = trackData(), center = track[clamp(Math.round(hour / 3), 0, track.length - 1)];
+    const center = centerAtHour(hour);
     const profile = model?.radial_profile || [];
+    const dt = lastWindTick ? Math.min(.08, (t - lastWindTick) / 1000) : 0;
+    lastWindTick = t;
+    const heading = scenario.heading * RAD, steering = scenario.speed / 3.6 * .5;
+    const northSign = center.latitude >= 0 ? 1 : -1;
     for (let i = 0; i < arr.length / 3; i++) {
-      const f = (i % 73) / 72, radiusKm = 12 + 330 * f;
+      let east = windParticleState[i * 2], north = windParticleState[i * 2 + 1];
+      let radiusKm = Math.hypot(east, north);
+      if (radiusKm < 12 || radiusKm > 430) {
+        const angle = i * 2.3999632297 + t * .00008;
+        east = 290 * Math.cos(angle); north = 290 * Math.sin(angle); radiusKm = 290;
+      }
       let wind = Number(document.getElementById('intensity').value) * Math.exp(-radiusKm / 250);
       if (profile.length) {
         const p = profile.find(x => x.radius_km >= radiusKm) || profile[profile.length - 1];
         wind = p.wind_kmh;
       }
-      const angularRate = (wind / 3.6) / (radiusKm * 1000);
-      const angle = i * 2.3999632297 + (t / 1000) * 25 * angularRate * (center.latitude >= 0 ? 1 : -1);
-      const lat = center.latitude + Math.sin(angle) * radiusKm / 111.2;
-      const lon = center.longitude + Math.cos(angle) * radiusKm / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
+      const speed = wind / 3.6, tangential = Math.cos(18 * RAD) * speed, inward = Math.sin(18 * RAD) * speed;
+      const u = -northSign * tangential * north / radiusKm - inward * east / radiusKm + steering * Math.sin(heading);
+      const v = northSign * tangential * east / radiusKm - inward * north / radiusKm + steering * Math.cos(heading);
+      east += u * dt * 45 / 1000; north += v * dt * 45 / 1000;
+      windParticleState[i * 2] = east; windParticleState[i * 2 + 1] = north;
+      const lat = center.latitude + north / 111.2;
+      const lon = center.longitude + east / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
       const p = point(lat, lon, .022 + .004 * Math.sin(i * 1.8 + t * .003));
       arr[i * 3] = p.x; arr[i * 3 + 1] = p.y; arr[i * 3 + 2] = p.z;
     }
@@ -267,7 +295,7 @@ export function createGlobe(canvas, state) {
     fieldGroup.visible = mode === 'winds' || mode === 'ocean' || layer === 'winds';
     buildGlobalField();
   }
-  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); rebuildCloudBands(); }
+  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); }
   function setTrack(enabled) { if (trackLine) trackLine.visible = enabled; }
   function setWind(enabled) { if (windPoints) windPoints.visible = enabled; }
   function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.6); controls.update(); }
@@ -292,6 +320,15 @@ export function createGlobe(canvas, state) {
     if (trackLine) trackLine.visible = state.track;
     if (windPoints) windPoints.visible = state.windTrails;
     if (cloudBands) cloudBands.visible = layer === 'satellite';
+    if (cloudBands && cloudOrigin) {
+      const center = centerAtHour(hour);
+      const axis = point(center.latitude, center.longitude).normalize();
+      const move = new THREE.Quaternion().setFromUnitVectors(point(cloudOrigin.latitude, cloudOrigin.longitude).normalize(), axis);
+      const surfaceSpeed = (Number(document.getElementById('intensity').value) || 150) / 3.6;
+      const radiusMetres = (Number(document.getElementById('radiusMax').value) || 40) * 1000;
+      const angle = (center.latitude >= 0 ? 1 : -1) * t / 1000 * 18 * surfaceSpeed / radiusMetres;
+      cloudBands.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(axis, angle)).multiply(move);
+    }
     updateWind(t);
     fieldGroup.rotation.y = 0;
     renderer.render(scene, camera);

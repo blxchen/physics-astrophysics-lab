@@ -99,11 +99,21 @@ def wind_vector_ms(storm: Storm, east_km: float, north_km: float, b: float) -> t
         return 0.0, 0.0
     speed = tangential_wind_ms(storm, radius, b)
     sign = 1 if storm.latitude >= 0 else -1
-    u = -sign * speed * north_km / radius
-    v = sign * speed * east_km / radius
-    # A fixed 18° inward crossing angle approximates surface friction.
-    inflow = 0.325
-    return u - inflow * speed * east_km / radius, v - inflow * speed * north_km / radius
+    # Rotate the velocity 18° inward while preserving its modeled magnitude.
+    crossing = radians(18)
+    u = -sign * speed * cos(crossing) * north_km / radius - speed * sin(crossing) * east_km / radius
+    v = sign * speed * cos(crossing) * east_km / radius - speed * sin(crossing) * north_km / radius
+    return u, v
+
+
+def outer_wind_radius_km(profile: list[dict], threshold_kmh: float) -> float | None:
+    """Outer crossing of a wind threshold in the sampled radial profile."""
+    for inner, outer in reversed(list(zip(profile, profile[1:]))):
+        a, b = inner["wind_kmh"], outer["wind_kmh"]
+        if a >= threshold_kmh > b:
+            fraction = (threshold_kmh - b) / (a - b)
+            return round(outer["radius_km"] + fraction * (inner["radius_km"] - outer["radius_km"]), 1)
+    return None
 
 
 def destination(latitude: float, longitude: float, bearing_deg: float, distance_km: float) -> tuple[float, float]:
@@ -129,21 +139,49 @@ def loss_sensitivity(storm: Storm, peak_wind_kmh: float) -> dict:
 
 def simulate(storm: Storm) -> dict:
     b, capped = holland_b(storm)
-    radii = [0, 2, 5, 10, 15, 20, 25, 30, 38, 45, 55, 70, 90, 120, 160, 220, 300, 400, 500]
-    profile = [{"radius_km": r, "wind_kmh": round(tangential_wind_ms(storm, r, b) * 3.6, 2),
-                "pressure_hpa": round(pressure_hpa(storm, r, b), 2)} for r in radii]
+    radii = sorted(set([0, 2, storm.radius_max_wind_km] + list(range(5, 501, 5))))
+    profile = []
+    dp = (storm.ambient_pressure_hpa - storm.central_pressure_hpa) * 100
+    for r in radii:
+        wind = tangential_wind_ms(storm, r, b)
+        x = (storm.radius_max_wind_km / r) ** b if r else 0
+        gradient = dp * exp(-x) * b * x / r if r else 0  # Pa/km
+        delta = min(0.5, r / 2) if r else 0
+        vorticity = ((r + delta) * tangential_wind_ms(storm, r + delta, b)
+                     - (r - delta) * tangential_wind_ms(storm, r - delta, b)) / (2 * delta * r * 1000) if r else 0
+        profile.append({"radius_km": r, "wind_kmh": round(wind * 3.6, 2),
+                        "pressure_hpa": round(pressure_hpa(storm, r, b), 2),
+                        "pressure_gradient_pa_km": round(gradient, 2),
+                        "wind_energy_j_m3": round(0.5 * AIR_DENSITY_KG_M3 * wind * wind, 2),
+                        "wind_power_w_m2": round(0.5 * AIR_DENSITY_KG_M3 * wind ** 3, 2),
+                        "vorticity_1e5_s": round((1 if storm.latitude >= 0 else -1) * vorticity * 1e5, 3)})
     track = []
     for h in range(0, 73, 3):
         lat, lon = destination(storm.latitude, storm.longitude, storm.heading_deg, storm.translation_kmh * h)
         track.append({"hour": h, "latitude": round(lat, 5), "longitude": round(lon, 5)})
     max_model_wind = max(p["wind_kmh"] for p in profile)
+    heading = radians(storm.heading_deg)
+    motion_east = 0.5 * storm.translation_kmh / 3.6 * sin(heading)
+    motion_north = 0.5 * storm.translation_kmh / 3.6 * cos(heading)
+    azimuthal = []
+    for bearing in range(0, 361, 5):
+        angle = radians(bearing)
+        east = storm.radius_max_wind_km * sin(angle)
+        north = storm.radius_max_wind_km * cos(angle)
+        u, v = wind_vector_ms(storm, east, north, b)
+        azimuthal.append({"bearing_deg": bearing,
+                          "wind_kmh": round(hypot(u + motion_east, v + motion_north) * 3.6, 2)})
     return {
         "model": "Holland-type axisymmetric gradient wind; idealized open-water scenario",
         "inputs": storm.__dict__, "shape_parameter_b": round(b, 4),
         "shape_parameter_limited": capped,
         "radial_profile": profile, "track": track,
+        "azimuthal_profile": azimuthal,
+        "wind_radii_km": {"34kt": outer_wind_radius_km(profile, 34 * 1.852),
+                          "50kt": outer_wind_radius_km(profile, 50 * 1.852),
+                          "64kt": outer_wind_radius_km(profile, 64 * 1.852)},
         "peak_profile_wind_kmh": round(max_model_wind, 2),
         "loss": loss_sensitivity(storm, max_model_wind),
-        "limitations": ["Not a weather forecast", "No land interaction or terrain", "No bathymetry or calibrated rainfall", "Economic loss requires user exposure"],
+        "limitations": ["Not a weather forecast", "No land interaction or terrain", "No bathymetry or calibrated rainfall", "Translation asymmetry uses an assumed half-speed vector", "Economic loss requires user exposure"],
     }
 
