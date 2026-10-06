@@ -3,6 +3,8 @@ name: Deploy PAL to GitHub Pages
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '13 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +25,11 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest backend.test_physics -v
+      - run: python -m backend.build_snapshot
       - run: npm ci
       - run: npm run build
         env:

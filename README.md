@@ -1,6 +1,6 @@
 # Physics and Astrophysics Lab — Atmosphere Lab
 
-PAL is a 3D, interactive Earth-systems experiment. The frontend uses Three.js and daily NASA imagery. A Python API evaluates an idealized tropical-cyclone wind field and retrieves current NHC storm status. Open-Meteo supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
+PAL is a 3D, interactive Earth-systems experiment. The frontend uses Three.js and daily NASA imagery. A Python model evaluates an idealized tropical-cyclone wind field. A scheduled Python data build retrieves NHC storm status and Open-Meteo wind and ocean fields for GitHub Pages; the same Python code can run as an on-demand API. Open-Meteo also supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
 
 ## Run locally
 
@@ -58,7 +58,7 @@ This experiment is for exploration and education. Use official meteorological ag
 
 ## Deployment
 
-The [GitHub Pages workflow](.github/workflows/pages.yml) builds and publishes the static Vite frontend from `main`. GitHub Pages cannot execute Python. The [Render Blueprint](render.yaml) deploys `backend.server` as a free Python web service. Once the service has a public URL, add repository variable `PAL_API_BASE` with that URL and rerun the Pages workflow. The Pages build then calls the hosted API. Render's free service may sleep after inactivity, during which the browser equation fallback keeps the UI usable.
+The [GitHub Pages workflow](.github/workflows/pages.yml) runs the Python tests and [`build_snapshot.py`](backend/build_snapshot.py), builds the Vite frontend, and deploys it from `main`. It refreshes the snapshot hourly; every published snapshot includes its generation time. GitHub Pages does not execute Python on requests, so custom parameter changes use the same documented equations in the browser. The default presets use Python-calculated snapshot results. NHC and global vector data on Pages can be delayed by Actions scheduling or source latency.
 
-The Pages site can be deployed before the Python host is connected. NHC live storm listings require the Python service; the preset and custom scenarios still work without it.
+For immediate Python calculations, the optional [Render Blueprint](render.yaml) deploys `backend.server` on a free Python web service. Once it has a public URL, add repository variable `PAL_API_BASE` with that URL and rerun the Pages workflow. Render's free service may sleep after inactivity; the snapshot and browser equation fallback keep the UI usable. The site does not require Render to publish.
 

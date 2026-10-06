@@ -19,6 +19,7 @@ const globe = createGlobe($('globeCanvas'), state);
 let simulationTimer = 0;
 let simulationRequest = 0;
 const fieldCache = {};
+let snapshot = null;
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function formatCoord(lat, lon) { return `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'} · ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? 'E' : 'W'}`; }
@@ -38,7 +39,7 @@ function updateControls() {
   scheduleSimulation();
 }
 function renderScenarios() {
-  $('scenarioList').innerHTML = scenarios.map(s => `<button class="scenario ${s.id === state.scenario.id ? 'active' : ''}" data-scenario="${s.id}"><span class="scenario-mark">${s.live ? '◌' : '◉'}</span><span><strong>${escapeHtml(s.name)}</strong><small>${s.live ? 'NHC LIVE · ' : ''}${escapeHtml(s.region)}</small></span><span class="scenario-arrow">→</span></button>`).join('');
+  $('scenarioList').innerHTML = scenarios.map(s => `<button class="scenario ${s.id === state.scenario.id ? 'active' : ''}" data-scenario="${s.id}"><span class="scenario-mark">${s.live ? '◌' : '◉'}</span><span><strong>${escapeHtml(s.name)}</strong><small>${s.live ? 'NHC DATA · ' : ''}${escapeHtml(s.region)}</small></span><span class="scenario-arrow">→</span></button>`).join('');
   document.querySelectorAll('[data-scenario]').forEach(b => b.onclick = () => selectScenario(b.dataset.scenario));
 }
 function selectScenario(id) {
@@ -130,6 +131,10 @@ async function runSimulation() {
       model = await response.json(); source = 'PYTHON PHYSICS API';
     } catch { /* The same documented equations run locally when the service sleeps. */ }
   }
+  const preset = snapshot?.presets?.[state.scenario.id];
+  if (!model && preset && Object.entries(data).every(([key, value]) => Math.abs(value - (preset.inputs?.[key] ?? NaN)) < 1e-8)) {
+    model = preset; source = 'PYTHON ACTIONS SNAPSHOT';
+  }
   if (request !== simulationRequest) return;
   state.model = model || localSimulation(data); state.modelSource = source;
   const limited = state.model.shape_parameter_limited ? ' · PARAMETER LIMITED' : '';
@@ -138,35 +143,38 @@ async function runSimulation() {
   renderAnalysis();
 }
 async function fetchLiveStorms() {
-  if (!API_BASE) return;
-  try {
-    const response = await fetch(`${API_BASE}/api/storms`, { signal: AbortSignal.timeout(9000) });
-    if (!response.ok) return;
-    const data = await response.json();
-    for (const s of data.storms || []) {
-      if (scenarios.some(x => x.id === s.id)) continue;
-      scenarios.unshift({ id: s.id, name: s.name, region: 'NHC advisory region', type: s.classification || 'Tropical cyclone', lat: s.latitude, lon: s.longitude, wind: Math.round(s.wind_kmh), pressure: Math.round(s.pressure_hpa), seaTemp: 28, speed: Math.round(s.translation_kmh || 0), rmax: 40, heading: s.heading_deg ?? 315, live: true });
-    }
-    renderScenarios();
-  } catch { /* NHC feed is optional. */ }
+  let items = snapshot?.storms || [];
+  if (API_BASE) { try { const response = await fetch(`${API_BASE}/api/storms`, { signal: AbortSignal.timeout(9000) }); if (response.ok) items = (await response.json()).storms || items; } catch { /* Keep snapshot. */ } }
+  for (const s of items) {
+    if (scenarios.some(x => x.id === s.id)) continue;
+    scenarios.unshift({ id: s.id, name: s.name, region: 'NHC advisory region', type: s.classification || 'Tropical cyclone', lat: s.latitude, lon: s.longitude, wind: Math.round(s.wind_kmh), pressure: Math.round(s.pressure_hpa), seaTemp: 28, speed: Math.round(s.translation_kmh || 0), rmax: 40, heading: s.heading_deg ?? 315, live: true });
+  }
+  renderScenarios();
 }
 async function fetchField(kind) {
-  if (fieldCache[kind]) { globe.setFieldData(kind, fieldCache[kind]); $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · 49 SAMPLES`; return; }
-  if (!API_BASE) return;
+  if (fieldCache[kind]) { globe.setFieldData(kind, fieldCache[kind]); $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${fieldCache[kind].length} SAMPLES`; return; }
+  let data = snapshot?.fields?.[kind];
+  if (API_BASE) { try { const response = await fetch(`${API_BASE}/api/field?kind=${kind}`, { signal: AbortSignal.timeout(18000) }); if (response.ok) data = await response.json(); } catch { /* Keep snapshot. */ } }
+  if (!data?.grid_points?.length) return;
+  fieldCache[kind] = data.grid_points;
+  globe.setFieldData(kind, data.grid_points);
+  if (state.layer === (kind === 'wind' ? 'winds' : 'ocean')) $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${data.grid_points.length} SAMPLES`;
+}
+async function loadSnapshot() {
   try {
-    const response = await fetch(`${API_BASE}/api/field?kind=${kind}`, { signal: AbortSignal.timeout(18000) });
+    const response = await fetch(`${import.meta.env.BASE_URL}data/snapshot.json`, { cache: 'no-store' });
     if (!response.ok) return;
-    const data = await response.json();
-    if (!data.grid_points?.length) return;
-    fieldCache[kind] = data.grid_points;
-    globe.setFieldData(kind, data.grid_points);
-    if (state.layer === (kind === 'wind' ? 'winds' : 'ocean')) $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${data.grid_points.length} SAMPLES`;
-  } catch { /* Keep labeled illustrative fallback. */ }
+    snapshot = await response.json();
+    if (snapshot.generated_at) $('snapshotStamp').textContent = `· SNAPSHOT ${snapshot.generated_at.slice(0, 16).replace('T', ' ')} UTC`;
+    fetchLiveStorms();
+    if (state.layer === 'winds' || state.layer === 'ocean') fetchField(state.layer === 'winds' ? 'wind' : 'ocean');
+    runSimulation();
+  } catch { /* A local development build may not have a generated snapshot. */ }
 }
 
 function metricCard(label, value, unit, kind = 'model') { return `<div class="metric-card ${kind}"><span>${label}</span><strong>${value}</strong><small>${unit}</small></div>`; }
 function renderAnalysis() {
-  const v = controls(), o = state.observed, m = state.model, has = !!o, source = state.modelSource === 'PYTHON PHYSICS API' ? 'PYTHON MODEL' : 'SAME EQUATIONS · BROWSER';
+  const v = controls(), o = state.observed, m = state.model, has = !!o, source = state.modelSource.startsWith('PYTHON') ? 'PYTHON MODEL' : 'SAME EQUATIONS · BROWSER';
   $('metricGrid').innerHTML = [
     metricCard('PEAK PROFILE WIND', m ? m.peak_profile_wind_kmh.toFixed(0) : '—', `KM/H · ${source}`),
     metricCard('CENTRAL PRESSURE', v.pressure.toFixed(0), 'HPA · INPUT'),
@@ -231,5 +239,5 @@ $('newScenario').onclick = () => $('stormDialog').showModal(); $('closeDialog').
 $('stormForm').onsubmit = e => { e.preventDefault(); const name = $('customName').value.trim(), lat = +$('customLat').value, lon = +$('customLon').value; if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return; const s = { id: `custom-${Date.now()}`, name, region: 'Custom location', type: 'Custom storm', lat, lon, wind: 130, pressure: 970, seaTemp: 29, speed: 18, rmax: 40, heading: 315 }; scenarios.push(s); $('stormDialog').close(); $('stormForm').reset(); selectScenario(s.id); };
 function tickClock() { $('utcClock').textContent = new Date().toISOString().slice(11, 16) + ' UTC'; }
 tickClock(); setInterval(tickClock, 30000); window.addEventListener('resize', drawChart);
-selectScenario('pacific'); fetchLiveStorms();
+selectScenario('pacific'); loadSnapshot(); fetchLiveStorms();
 
