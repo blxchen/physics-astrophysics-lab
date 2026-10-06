@@ -6,7 +6,12 @@ export function createMap(canvas, state) {
   const ctx = canvas.getContext('2d');
   const base = document.createElement('canvas'), baseContext = base.getContext('2d');
   const image = new Image();
-  image.src = `${import.meta.env.BASE_URL}earth/blue-marble-relief-${window.innerWidth >= 1100 ? '8k' : '4k'}.jpg`;
+  let imageRequested = false;
+  function ensureImage() {
+    if (imageRequested) return;
+    imageRequested = true;
+    image.src = `${import.meta.env.BASE_URL}earth/blue-marble-relief-${window.innerWidth >= 1100 ? '8k' : '4k'}.jpg`;
+  }
   image.onload = () => { backgroundDirty = true; };
   let width = 0, height = 0, dpr = 1, centerLat = state.scenario.lat, centerLon = state.scenario.lon;
   let degreesPerPixel = .026, following = true, mode = 'typhoon', layer = 'satellite';
@@ -169,6 +174,7 @@ export function createMap(canvas, state) {
   function frame(t) {
     requestAnimationFrame(frame);
     if (canvas.hidden || !width || !height) { lastFrame = t; return; }
+    ensureImage();
     const dt = lastFrame ? Math.min(.08, (t - lastFrame) / 1000) : 0; lastFrame = t;
     drawBackground(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(base, 0, 0, width, height);
     const center = centerAtHour();

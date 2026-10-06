@@ -22,7 +22,8 @@ function buildStars() {
 
 export function createGlobe(canvas, state) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // Keep a sharp globe without multiplying the fragment workload on retina screens.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.35));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.35;
@@ -42,17 +43,17 @@ export function createGlobe(canvas, state) {
   sun.position.set(4, 2, 5);
   scene.add(sun, buildStars());
 
-  const globeGeometry = new THREE.SphereGeometry(R, 192, 128);
+  const globeGeometry = new THREE.SphereGeometry(R, 96, 64);
   const earth = new THREE.Mesh(globeGeometry, new THREE.MeshStandardMaterial({ color: 0x4e8798, roughness: .95, metalness: 0 }));
   scene.add(earth);
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
-  const requestedWidth = window.innerWidth >= 1400 ? 8192 : window.innerWidth >= 800 ? 4096 : 2048;
+  const requestedWidth = window.innerWidth >= 800 ? 4096 : 2048;
   const baseWidth = [8192, 4096, 2048].find(width => width <= Math.min(renderer.capabilities.maxTextureSize, requestedWidth)) || 2048;
   const imageLabel = document.getElementById('imageryDate');
   loader.load(`${import.meta.env.BASE_URL}earth/blue-marble-relief-${baseWidth / 1024}k.jpg`, texture => {
     texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
     earth.material.map = texture;
     earth.material.color.setHex(0xffffff);
     earth.material.needsUpdate = true;
@@ -77,7 +78,7 @@ export function createGlobe(canvas, state) {
   stormGroup.add(halo);
   let scenario = state.scenario, model = null, mode = 'typhoon', layer = 'satellite', hour = 0;
   const fieldData = { wind: null, ocean: null };
-  let trackLine, windPoints, windParticleState, lastWindTick = 0, cloudBands, cloudOrigin, fieldVisual, fieldOrigin;
+  let trackLine, windPoints, windParticleState, lastWindTick = 0, cloudBands, cloudOrigin, fieldVisual, fieldOrigin, pressureOrigin;
 
   function clearObject(obj) {
     if (!obj) return;
@@ -112,7 +113,9 @@ export function createGlobe(canvas, state) {
   }
   function rebuildPressure() {
     for (const child of [...pressureGroup.children]) clearObject(child);
+    pressureGroup.quaternion.identity();
     const center = centerAtHour(hour);
+    pressureOrigin = center;
     for (const radiusKm of (model?.isobars?.length ? model.isobars.map(row => row.radius_km) : [45, 90, 150, 240, 350])) {
       const vertices = [];
       for (let i = 0; i <= 120; i++) {
@@ -126,7 +129,7 @@ export function createGlobe(canvas, state) {
   }
   function rebuildWind() {
     clearObject(windPoints);
-    const count = 1600;
+    const count = 800;
     const positions = new Float32Array(count * 3);
     windParticleState = new Float32Array(count * 2);
     for (let i = 0; i < count; i++) {
@@ -202,7 +205,8 @@ export function createGlobe(canvas, state) {
     if (!windPoints || !state.windTrails || mode !== 'typhoon') return;
     const arr = windPoints.geometry.attributes.position.array;
     const center = centerAtHour(hour);
-    const profile = model?.radial_profile || [];
+    const grid = model?.field_grid;
+    const fallbackWind = model?.inputs?.maximum_wind_kmh ?? scenario.wind;
     const dt = lastWindTick ? Math.min(.08, (t - lastWindTick) / 1000) : 0;
     lastWindTick = t;
     const heading = scenario.heading * RAD, steering = scenario.speed / 3.6 * (model?.inputs?.translation_factor ?? .5);
@@ -214,15 +218,10 @@ export function createGlobe(canvas, state) {
         const angle = i * 2.3999632297 + t * .00008;
         east = 290 * Math.cos(angle); north = 290 * Math.sin(angle); radiusKm = 290;
       }
-      let wind = Number(document.getElementById('intensity').value) * Math.exp(-radiusKm / 250);
-      if (profile.length) {
-        const p = profile.find(x => x.radius_km >= radiusKm) || profile[profile.length - 1];
-        wind = p.wind_kmh;
-      }
+      let wind = fallbackWind * Math.exp(-radiusKm / 250);
       const speed = wind / 3.6, crossing = (model?.inputs?.inflow_angle_deg ?? 18) * RAD, tangential = Math.cos(crossing) * speed, inward = Math.sin(crossing) * speed;
       let u = -northSign * tangential * north / radiusKm - inward * east / radiusKm + steering * Math.sin(heading);
       let v = northSign * tangential * east / radiusKm - inward * north / radiusKm + steering * Math.cos(heading);
-      const grid = model?.field_grid;
       if (grid && Math.abs(east) <= grid.extent_km && Math.abs(north) <= grid.extent_km) {
         const ix = clamp(Math.round(east / grid.step_km + (grid.size - 1) / 2), 0, grid.size - 1);
         const iy = clamp(Math.round(north / grid.step_km + (grid.size - 1) / 2), 0, grid.size - 1);
@@ -286,7 +285,7 @@ export function createGlobe(canvas, state) {
     fieldGroup.visible = mode === 'winds' || mode === 'ocean';
     buildGlobalField();
   }
-  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); }
+  function setHour(nextHour) { hour = nextHour; }
   function setTrack(enabled) { if (trackLine) trackLine.visible = enabled; }
   function setWind(enabled) { if (windPoints) windPoints.visible = enabled; }
   function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.15); controls.update(); }
@@ -302,8 +301,11 @@ export function createGlobe(canvas, state) {
   resize();
   setStorm(scenario);
   setMode('typhoon', 'satellite');
+  let lastFrame = 0;
   function animate(t) {
     requestAnimationFrame(animate);
+    if (document.hidden || canvas.hidden || !canvas.offsetWidth || t - lastFrame < 32) return;
+    lastFrame = t;
     controls.update();
     eye.position.copy(positionAtHour(hour));
     halo.position.copy(eye.position);
@@ -324,6 +326,10 @@ export function createGlobe(canvas, state) {
     if (fieldVisual && fieldOrigin) {
       const center = centerAtHour(hour);
       fieldVisual.quaternion.setFromUnitVectors(point(fieldOrigin.latitude, fieldOrigin.longitude).normalize(), point(center.latitude, center.longitude).normalize());
+    }
+    if (pressureOrigin && pressureGroup.visible) {
+      const center = centerAtHour(hour);
+      pressureGroup.quaternion.setFromUnitVectors(point(pressureOrigin.latitude, pressureOrigin.longitude).normalize(), point(center.latitude, center.longitude).normalize());
     }
     updateWind(t);
     fieldGroup.rotation.y = 0;
