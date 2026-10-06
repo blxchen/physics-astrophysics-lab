@@ -1,6 +1,6 @@
 # Physics and Astrophysics Lab — Atmosphere Lab
 
-PAL is a 3D, interactive Earth-systems experiment. The frontend uses Three.js and daily NASA imagery. A Python model evaluates an idealized tropical-cyclone wind field. A scheduled Python data build retrieves NHC storm status and Open-Meteo wind and ocean fields for GitHub Pages; the same Python code can run as an on-demand API. Open-Meteo also supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
+PAL is a 3D, interactive Earth-systems experiment. The frontend uses Three.js and a complete NASA Blue Marble shaded-relief texture. A Python model evaluates an idealized tropical-cyclone wind field. A scheduled Python data build retrieves NHC storm status and Open-Meteo wind and ocean fields for GitHub Pages; the same Python code can run as an on-demand API. Open-Meteo also supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
 
 ## Run locally
 
@@ -53,7 +53,7 @@ The curve is **not calibrated to real building inventories or vulnerability clas
 
 | Layer | Source | Meaning |
 | --- | --- | --- |
-| Earth texture | [NASA GIBS](https://www.earthdata.nasa.gov/data/tools/gibs) Blue Marble Shaded Relief and MODIS Terra corrected reflectance | Continuous shaded-relief base (up to 8K) with the previous UTC day's MODIS swaths (up to 4K) overlaid. Black no-data swaths are masked to reveal the base. Neither layer is live video. |
+| Earth texture | [NASA GIBS](https://www.earthdata.nasa.gov/data/tools/gibs) Blue Marble Shaded Relief | Complete 2K, 4K, and 8K textures are bundled with the site. The globe uses the largest supported tier for its screen and GPU. This is a static historical Earth composite, not current cloud imagery. |
 | Nearby weather | [Open-Meteo Forecast API](https://open-meteo.com/en/docs) | Gridded hourly forecast at the selected coordinates, not cyclone center observations. |
 | Active Atlantic / eastern Pacific storms | [NOAA NHC CurrentStorms.json](https://www.nhc.noaa.gov/productexamples/) | Advisory center, wind, pressure, and motion retrieved by the Python API; no other basins implied. |
 | Radial profile and scenario track | `backend/physics.py` | Idealized physics output. Live NHC values become initial conditions only. |

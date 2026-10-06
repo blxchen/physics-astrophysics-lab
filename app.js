@@ -12,7 +12,7 @@ const experimentMeta = {
   typhoon: ['Typhoon dynamics', 'Explore the forces that shape tropical cyclones.', 'Western Pacific'],
   winds: ['Global winds', 'Illustrative circulation lines over the 3D Earth.', 'Atmospheric circulation'],
   ocean: ['Ocean currents', 'Explore illustrative heat-transport paths.', 'Ocean circulation'],
-  clouds: ['Cloud systems', 'Explore daily satellite cloud cover.', 'Cloud cover']
+  clouds: ['Cloud systems', 'Explore an illustrative storm cloud canopy over NASA Earth imagery.', 'Cloud structure']
 };
 const state = { scenario: scenarios[0], experiment: 'typhoon', tab: 'simulation', layer: 'satellite', hour: 0, playing: false, playbackSpeed: 1, windTrails: true, track: true, observed: null, weatherSeries: null, weatherStart: 0, obsStatus: 'loading', model: null, modelSource: 'pending' };
 const globe = createGlobe($('globeCanvas'), state);
@@ -91,7 +91,7 @@ function setExperiment(key) {
 function setLayer(layer) {
   state.layer = layer;
   document.querySelectorAll('.rail-button[data-layer]').forEach(b => b.classList.toggle('active', b.dataset.layer === layer));
-  $('legendLabel').textContent = layer === 'satellite' ? 'NASA SATELLITE IMAGERY' : layer === 'winds' ? 'ILLUSTRATIVE WIND LINES' : layer === 'ocean' ? 'ILLUSTRATIVE OCEAN LINES' : 'HOLLAND PRESSURE PROFILE';
+  $('legendLabel').textContent = state.experiment === 'clouds' ? 'ILLUSTRATIVE STORM CLOUD CANOPY' : layer === 'satellite' ? 'NASA BLUE MARBLE RELIEF' : layer === 'winds' ? 'ILLUSTRATIVE WIND LINES' : layer === 'ocean' ? 'ILLUSTRATIVE OCEAN LINES' : 'HOLLAND PRESSURE PROFILE';
   globe.setMode(state.experiment, layer);
   if (layer === 'winds' || layer === 'ocean') fetchField(layer === 'winds' ? 'wind' : 'ocean');
 }

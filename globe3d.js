@@ -8,11 +8,6 @@ function point(lat, lon, altitude = 0) {
   const phi = lat * RAD, lam = lon * RAD, radius = R + altitude;
   return new THREE.Vector3(radius * Math.cos(phi) * Math.cos(lam), radius * Math.sin(phi), -radius * Math.cos(phi) * Math.sin(lam));
 }
-function yesterday() { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
-function nasaUrl(layer, date, width, format = 'image/jpeg') {
-  const time = date ? `&TIME=${date}` : '';
-  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&FORMAT=${format}&TRANSPARENT=TRUE&WIDTH=${width}&HEIGHT=${width / 2}&CRS=EPSG:4326&BBOX=-90,-180,90,180${time}`;
-}
 function buildStars() {
   const vertices = [];
   for (let i = 0; i < 1400; i++) {
@@ -52,48 +47,17 @@ export function createGlobe(canvas, state) {
   scene.add(earth);
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
-  const baseWidth = Math.min(renderer.capabilities.maxTextureSize, window.innerWidth >= 1400 ? 8192 : window.innerWidth >= 800 ? 4096 : 2048);
-  const observationWidth = Math.min(renderer.capabilities.maxTextureSize, window.innerWidth >= 1100 ? 4096 : 2048);
+  const requestedWidth = window.innerWidth >= 1400 ? 8192 : window.innerWidth >= 800 ? 4096 : 2048;
+  const baseWidth = [8192, 4096, 2048].find(width => width <= Math.min(renderer.capabilities.maxTextureSize, requestedWidth)) || 2048;
   const imageLabel = document.getElementById('imageryDate');
-  let observationReady = false;
-  loader.load(nasaUrl('BlueMarble_ShadedRelief', null, baseWidth), texture => {
+  loader.load(`${import.meta.env.BASE_URL}earth/blue-marble-relief-${baseWidth / 1024}k.jpg`, texture => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
     earth.material.map = texture;
     earth.material.color.setHex(0xffffff);
     earth.material.needsUpdate = true;
-    if (!observationReady) imageLabel.textContent = `BLUE MARBLE ${baseWidth / 1024}K`;
+    imageLabel.textContent = `NASA BLUE MARBLE RELIEF · ${baseWidth / 1024}K`;
   }, undefined, () => { imageLabel.textContent = 'BASE IMAGERY UNAVAILABLE'; });
-
-  // Daily MODIS true color is a swath composite. Its no-data wedges are opaque
-  // black even when GIBS is asked for a transparent PNG, so derive an alpha mask.
-  // Blue Marble remains below every unobserved pixel.
-  const observation = new Image();
-  observation.crossOrigin = 'anonymous';
-  observation.onload = () => {
-    const imageCanvas = document.createElement('canvas');
-    imageCanvas.width = observation.naturalWidth;
-    imageCanvas.height = observation.naturalHeight;
-    const context = imageCanvas.getContext('2d', { willReadFrequently: true });
-    context.drawImage(observation, 0, 0);
-    const pixels = context.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
-    const rgba = pixels.data;
-    for (let i = 0; i < rgba.length; i += 4) {
-      const lightest = Math.max(rgba[i], rgba[i + 1], rgba[i + 2]);
-      // Feather compression edges while retaining dark, blue ocean pixels.
-      rgba[i + 3] = Math.min(rgba[i + 3], Math.round(255 * clamp((lightest - 9) / 24, 0, 1)));
-    }
-    context.putImageData(pixels, 0, 0);
-    const texture = new THREE.CanvasTexture(imageCanvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    const overlay = new THREE.Mesh(new THREE.SphereGeometry(R + .0015, 192, 128), new THREE.MeshStandardMaterial({ map: texture, transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }));
-    scene.add(overlay);
-    observationReady = true;
-    imageLabel.textContent = `MODIS ${yesterday()} + BLUE MARBLE`;
-  };
-  observation.onerror = () => { if (imageLabel.textContent === 'LATEST AVAILABLE') imageLabel.textContent = 'BLUE MARBLE BASE'; };
-  observation.src = nasaUrl('MODIS_Terra_CorrectedReflectance_TrueColor', yesterday(), observationWidth, 'image/png');
 
   const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.04, 64, 48), new THREE.ShaderMaterial({
     transparent: true, side: THREE.BackSide, depthWrite: false,
@@ -290,7 +254,7 @@ export function createGlobe(canvas, state) {
   }
   function setMode(nextMode, nextLayer) {
     mode = nextMode; layer = nextLayer;
-    stormGroup.visible = mode === 'typhoon';
+    stormGroup.visible = mode === 'typhoon' || mode === 'clouds';
     pressureGroup.visible = mode === 'typhoon' && layer === 'pressure';
     fieldGroup.visible = mode === 'winds' || mode === 'ocean' || layer === 'winds';
     buildGlobalField();
@@ -317,9 +281,9 @@ export function createGlobe(canvas, state) {
     eye.position.copy(positionAtHour(hour));
     halo.position.copy(eye.position);
     halo.scale.setScalar(1 + .16 * Math.sin(t * .003));
-    if (trackLine) trackLine.visible = state.track;
-    if (windPoints) windPoints.visible = state.windTrails;
-    if (cloudBands) cloudBands.visible = layer === 'satellite';
+    if (trackLine) trackLine.visible = mode === 'typhoon' && state.track;
+    if (windPoints) windPoints.visible = mode === 'typhoon' && state.windTrails;
+    if (cloudBands) cloudBands.visible = mode === 'clouds' || (mode === 'typhoon' && layer === 'satellite');
     if (cloudBands && cloudOrigin) {
       const center = centerAtHour(hour);
       const axis = point(center.latitude, center.longitude).normalize();
