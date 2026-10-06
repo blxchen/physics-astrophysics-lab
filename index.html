@@ -7,7 +7,7 @@
   <title>PAL — Atmosphere Lab</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Mulish:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -42,9 +42,11 @@
         <section id="simulationView" class="view simulation-view">
           <div class="globe-panel">
             <canvas id="globeCanvas" aria-label="Interactive 3D globe showing the current atmospheric scenario"></canvas>
+            <canvas id="mapCanvas" aria-label="Interactive 2D Earth map showing the current atmospheric scenario" hidden></canvas>
             <div class="globe-topline"><div><span class="panel-kicker">VISUALIZATION / 001</span><h2 id="sceneTitle">Western Pacific</h2></div><div class="coordinate-pill" id="coordinates">18.8°N · 126.2°E</div></div>
+            <div class="dimension-toggle" role="group" aria-label="Map dimension"><button id="view3d" class="active" aria-pressed="true">3D GLOBE</button><button id="view2d" aria-pressed="false">2D MAP</button></div>
             <div class="globe-left-rail"><button class="rail-button active" data-layer="satellite" title="Satellite imagery">◐</button><button class="rail-button" data-layer="winds" title="Wind field">≋</button><button class="rail-button" data-layer="pressure" title="Pressure field">◎</button><span class="rail-divider"></span><button class="rail-button" id="resetGlobe" title="Reset globe">⌖</button></div>
-            <div class="globe-bottomline"><div class="legend"><span class="legend-dot"></span><span id="legendLabel">NASA SATELLITE IMAGERY</span><small id="imageryDate">LATEST AVAILABLE</small></div><div class="globe-hint">DRAG TO ROTATE · SCROLL TO ZOOM</div></div>
+            <div class="globe-bottomline"><div class="legend"><span class="legend-dot"></span><span id="legendLabel">NASA BLUE MARBLE RELIEF</span><small id="imageryDate">STATIC EARTH BASEMAP</small></div><div class="globe-hint" id="interactionHint">DRAG TO ROTATE · SCROLL TO ZOOM</div></div>
             <div class="zoom-controls"><button id="zoomIn" aria-label="Zoom in">＋</button><button id="zoomOut" aria-label="Zoom out">−</button></div>
           </div>
 
@@ -57,6 +59,8 @@
               <div class="control-group"><div class="control-label"><label for="seaTemp">Sea temperature · context</label><strong id="seaTempValue">29.4 <small>°C</small></strong></div><input type="range" id="seaTemp" min="22" max="34" value="29.4" step="0.1" /><div class="range-labels"><span>COOL</span><span>WARM</span></div></div>
               <div class="control-group"><div class="control-label"><label for="stormSpeed">Translation speed</label><strong id="stormSpeedValue">22 <small>km/h</small></strong></div><input type="range" id="stormSpeed" min="2" max="60" value="22" /><div class="range-labels"><span>SLOW</span><span>FAST</span></div></div>
               <div class="control-group"><div class="control-label"><label for="radiusMax">Radius of maximum wind</label><strong id="radiusMaxValue">38 <small>km</small></strong></div><input type="range" id="radiusMax" min="10" max="150" value="38" /><div class="range-labels"><span>COMPACT</span><span>WIDE</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="inflowAngle">Surface inflow angle</label><strong id="inflowAngleValue">18 <small>°</small></strong></div><input type="range" id="inflowAngle" min="0" max="40" value="18" /><div class="range-labels"><span>CIRCULAR</span><span>STRONG INFLOW</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="translationFactor">Motion asymmetry</label><strong id="translationFactorValue">50 <small>%</small></strong></div><input type="range" id="translationFactor" min="0" max="100" value="50" /><div class="range-labels"><span>SYMMETRIC</span><span>FULL MOTION</span></div></div>
               <div class="toggle-row"><div><strong>Wind particle trails</strong><small>Animated flow around the eye</small></div><button id="windToggle" class="switch on" role="switch" aria-checked="true" aria-label="Wind particle trails"><span></span></button></div>
               <div class="toggle-row"><div><strong>Projected track</strong><small>Illustrative 72-hour path</small></div><button id="trackToggle" class="switch on" role="switch" aria-checked="true" aria-label="Projected track"><span></span></button></div>
               <button id="eyewallFocus" class="focus-button">◉ FOCUS ON EYEWALL</button>

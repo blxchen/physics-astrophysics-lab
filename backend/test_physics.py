@@ -51,6 +51,27 @@ class PhysicsTests(unittest.TestCase):
         at_rmax = next(p for p in result["radial_profile"] if p["radius_km"] == 38)
         self.assertLess(at_rmax["vorticity_1e5_s"], 0)
 
+    def test_sampled_field_matches_center_pressure_and_wind_asymmetry(self):
+        result = simulate(self.storm)
+        grid = result["field_grid"]
+        self.assertEqual(grid["size"], 41)
+        self.assertEqual(len(grid["u_ms"]), 41 * 41)
+        center = 20 * 41 + 20
+        self.assertEqual(grid["pressure_hpa"][center], self.storm.central_pressure_hpa)
+        self.assertGreater(max(grid["wind_kmh"]) - min(grid["wind_kmh"]), 100)
+        self.assertGreater(max(grid["cloud_proxy"]), 0)
+        self.assertTrue(all(0 <= row["radius_km"] <= 500 for row in result["isobars"]))
+
+    def test_custom_boundary_layer_controls(self):
+        still = Storm.from_dict({"inflow_angle_deg": 0, "translation_factor": 0})
+        inward = Storm.from_dict({"inflow_angle_deg": 30, "translation_factor": 1})
+        b, _ = holland_b(still)
+        u0, v0 = wind_vector_ms(still, 38, 0, b)
+        u1, v1 = wind_vector_ms(inward, 38, 0, b)
+        self.assertAlmostEqual(u0, 0, delta=1e-9)
+        self.assertLess(u1, 0)
+        self.assertLess(v1, v0)
+
     def test_invalid_nonfinite_input(self):
         with self.assertRaises(ValueError):
             Storm.from_dict({"maximum_wind_kmh": float("nan")})

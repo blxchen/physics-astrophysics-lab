@@ -1,4 +1,5 @@
 import { createGlobe } from './globe3d.js';
+import { createMap } from './map2d.js';
 
 const $ = id => document.getElementById(id);
 const RAD = Math.PI / 180;
@@ -14,8 +15,9 @@ const experimentMeta = {
   ocean: ['Ocean currents', 'Explore illustrative heat-transport paths.', 'Ocean circulation'],
   clouds: ['Cloud systems', 'Explore an illustrative storm cloud canopy over NASA Earth imagery.', 'Cloud structure']
 };
-const state = { scenario: scenarios[0], experiment: 'typhoon', tab: 'simulation', layer: 'satellite', hour: 0, playing: false, playbackSpeed: 1, windTrails: true, track: true, observed: null, weatherSeries: null, weatherStart: 0, obsStatus: 'loading', model: null, modelSource: 'pending' };
+const state = { scenario: scenarios[0], experiment: 'typhoon', dimension: '3d', tab: 'simulation', layer: 'satellite', hour: 0, playing: false, playbackSpeed: 1, windTrails: true, track: true, observed: null, weatherSeries: null, weatherStart: 0, obsStatus: 'loading', model: null, modelSource: 'pending' };
 const globe = createGlobe($('globeCanvas'), state);
+const map = createMap($('mapCanvas'), state);
 let simulationTimer = 0;
 let simulationRequest = 0;
 const fieldCache = {};
@@ -51,9 +53,9 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
 function formatCoord(lat, lon) { return `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'} · ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? 'E' : 'W'}`; }
 function category(wind) { if (wind < 119) return 'TS'; if (wind < 154) return 'CAT 1'; if (wind < 178) return 'CAT 2'; if (wind < 209) return 'CAT 3'; if (wind < 252) return 'CAT 4'; return 'CAT 5'; }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function controls() { return { wind: +$('intensity').value, pressure: +$('pressure').value, seaTemp: +$('seaTemp').value, speed: +$('stormSpeed').value, rmax: +$('radiusMax').value, assets: Math.max(0, +$('assetExposure').value || 0) }; }
-function payload() { const v = controls(), s = state.scenario; return { latitude: s.lat, longitude: s.lon, maximum_wind_kmh: v.wind, central_pressure_hpa: v.pressure, ambient_pressure_hpa: Math.max(1010, v.pressure + 8), radius_max_wind_km: v.rmax, translation_kmh: v.speed, heading_deg: s.heading, sea_temperature_c: v.seaTemp, exposed_assets_usd: v.assets }; }
-function setControls(s) { $('intensity').value = s.wind; $('pressure').value = s.pressure; $('seaTemp').value = s.seaTemp; $('stormSpeed').value = s.speed; $('radiusMax').value = s.rmax; updateControls(); }
+function controls() { return { wind: +$('intensity').value, pressure: +$('pressure').value, seaTemp: +$('seaTemp').value, speed: +$('stormSpeed').value, rmax: +$('radiusMax').value, inflow: +$('inflowAngle').value, asymmetry: +$('translationFactor').value / 100, assets: Math.max(0, +$('assetExposure').value || 0) }; }
+function payload() { const v = controls(), s = state.scenario; return { latitude: s.lat, longitude: s.lon, maximum_wind_kmh: v.wind, central_pressure_hpa: v.pressure, ambient_pressure_hpa: Math.max(1010, v.pressure + 8), radius_max_wind_km: v.rmax, translation_kmh: v.speed, heading_deg: s.heading, sea_temperature_c: v.seaTemp, exposed_assets_usd: v.assets, inflow_angle_deg: v.inflow, translation_factor: v.asymmetry }; }
+function setControls(s) { $('intensity').value = s.wind; $('pressure').value = s.pressure; $('seaTemp').value = s.seaTemp; $('stormSpeed').value = s.speed; $('radiusMax').value = s.rmax; $('inflowAngle').value = s.inflow ?? 18; $('translationFactor').value = Math.round((s.asymmetry ?? .5) * 100); updateControls(); }
 function updateControls() {
   const v = controls();
   $('intensityValue').innerHTML = `${v.wind} <small>km/h</small>`;
@@ -61,6 +63,8 @@ function updateControls() {
   $('seaTempValue').innerHTML = `${v.seaTemp.toFixed(1)} <small>°C</small>`;
   $('stormSpeedValue').innerHTML = `${v.speed} <small>km/h</small>`;
   $('radiusMaxValue').innerHTML = `${v.rmax} <small>km</small>`;
+  $('inflowAngleValue').innerHTML = `${v.inflow} <small>°</small>`;
+  $('translationFactorValue').innerHTML = `${Math.round(v.asymmetry * 100)} <small>%</small>`;
   $('categoryBadge').textContent = category(v.wind);
   scheduleSimulation();
 }
@@ -76,7 +80,7 @@ function selectScenario(id) {
   $('stormType').textContent = `${s.type} · ${s.region}${s.live ? ' · NHC initial conditions' : ''}`;
   $('sceneTitle').textContent = s.region;
   $('coordinates').textContent = formatCoord(s.lat, s.lon);
-  globe.setStorm(s);
+  globe.setStorm(s); map.setStorm(s);
   setControls(s); renderScenarios(); fetchWeather();
 }
 function setExperiment(key) {
@@ -91,9 +95,9 @@ function setExperiment(key) {
 function setLayer(layer) {
   state.layer = layer;
   document.querySelectorAll('.rail-button[data-layer]').forEach(b => b.classList.toggle('active', b.dataset.layer === layer));
-  $('legendLabel').textContent = state.experiment === 'clouds' ? 'ILLUSTRATIVE STORM CLOUD CANOPY' : layer === 'satellite' ? 'NASA BLUE MARBLE RELIEF' : layer === 'winds' ? 'ILLUSTRATIVE WIND LINES' : layer === 'ocean' ? 'ILLUSTRATIVE OCEAN LINES' : 'HOLLAND PRESSURE PROFILE';
-  globe.setMode(state.experiment, layer);
-  if (layer === 'winds' || layer === 'ocean') fetchField(layer === 'winds' ? 'wind' : 'ocean');
+  $('legendLabel').textContent = state.experiment === 'clouds' ? 'MODEL CLOUD PROXY · NASA LAND' : layer === 'satellite' ? 'NASA BLUE MARBLE RELIEF · MODEL CLOUDS' : state.experiment === 'typhoon' && layer === 'winds' ? 'MODEL WIND FIELD · KM/H' : state.experiment === 'typhoon' && layer === 'pressure' ? 'HOLLAND MODEL ISOBARS · HPA' : layer === 'winds' ? 'OPEN-METEO WIND SAMPLES' : layer === 'ocean' ? 'OPEN-METEO CURRENT SAMPLES' : 'HOLLAND PRESSURE PROFILE';
+  globe.setMode(state.experiment, layer); map.setMode(state.experiment, layer);
+  if (state.experiment === 'winds' || state.experiment === 'ocean') fetchField(state.experiment === 'winds' ? 'wind' : 'ocean');
 }
 function setTab(tab) {
   state.tab = tab;
@@ -151,12 +155,30 @@ function localSimulation(p) {
   const excess = Math.max(0, peak_profile_wind_kmh - 90), loss_fraction = .35 * (1 - Math.exp(-((excess / 100) ** 3)));
   const radiusFor = threshold => { for (let i = radial_profile.length - 1; i > 0; i--) { const outer = radial_profile[i], inner = radial_profile[i - 1]; if (inner.wind_kmh >= threshold && outer.wind_kmh < threshold) return +(outer.radius_km + (threshold - outer.wind_kmh) / (inner.wind_kmh - outer.wind_kmh) * (inner.radius_km - outer.radius_km)).toFixed(1); } return null; };
   const azimuthal_profile = Array.from({ length: 73 }, (_, i) => {
-    const bearing_deg = i * 5, angle = bearing_deg * RAD, east = Math.sin(angle), north = Math.cos(angle), sign = p.latitude >= 0 ? 1 : -1, v = windAt(p.radius_max_wind_km), crossing = 18 * RAD, motion = .5 * p.translation_kmh / 3.6;
+    const bearing_deg = i * 5, angle = bearing_deg * RAD, east = Math.sin(angle), north = Math.cos(angle), sign = p.latitude >= 0 ? 1 : -1, v = windAt(p.radius_max_wind_km), crossing = p.inflow_angle_deg * RAD, motion = p.translation_factor * p.translation_kmh / 3.6;
     const u = -sign * v * Math.cos(crossing) * north - v * Math.sin(crossing) * east + motion * Math.sin(p.heading_deg * RAD);
     const y = sign * v * Math.cos(crossing) * east - v * Math.sin(crossing) * north + motion * Math.cos(p.heading_deg * RAD);
     return { bearing_deg, wind_kmh: +(Math.hypot(u, y) * 3.6).toFixed(2) };
   });
-  return { radial_profile, track, azimuthal_profile, wind_radii_km: { '34kt': radiusFor(34 * 1.852), '50kt': radiusFor(50 * 1.852), '64kt': radiusFor(64 * 1.852) }, shape_parameter_b: b, shape_parameter_limited: Math.abs(b - inferred) > 1e-9, peak_profile_wind_kmh, loss: p.exposed_assets_usd ? { status: 'illustrative', estimated_loss_usd: p.exposed_assets_usd * loss_fraction, loss_fraction } : { status: 'exposure_required', estimated_loss_usd: null, loss_fraction: null } };
+  const fieldAt = (east, north) => {
+    const radius = Math.hypot(east, north), speed = windAt(radius), sign = p.latitude >= 0 ? 1 : -1, cross = p.inflow_angle_deg * RAD, motion = p.translation_factor * p.translation_kmh / 3.6;
+    const u = radius ? -sign * speed * Math.cos(cross) * north / radius - speed * Math.sin(cross) * east / radius : 0;
+    const v = radius ? sign * speed * Math.cos(cross) * east / radius - speed * Math.sin(cross) * north / radius : 0;
+    const x = radius ? (p.radius_max_wind_km / radius) ** b : 0;
+    return [u + motion * Math.sin(p.heading_deg * RAD), v + motion * Math.cos(p.heading_deg * RAD), radius ? p.central_pressure_hpa + (p.ambient_pressure_hpa - p.central_pressure_hpa) * Math.exp(-x) : p.central_pressure_hpa];
+  };
+  const field_grid = { size: 41, step_km: 25, extent_km: 500, u_ms: [], v_ms: [], wind_kmh: [], pressure_hpa: [], convergence_1e4_s: [], cloud_proxy: [] };
+  for (let north = -500; north <= 500; north += 25) for (let east = -500; east <= 500; east += 25) {
+    const [u, v, pressure] = fieldAt(east, north), radius = Math.hypot(east, north);
+    const convergence = -((fieldAt(east + 5, north)[0] - fieldAt(east - 5, north)[0]) + (fieldAt(east, north + 5)[1] - fieldAt(east, north - 5)[1])) / 10000;
+    const eyeMask = clamp((radius / p.radius_max_wind_km - .65) / .45, 0, 1);
+    field_grid.u_ms.push(+u.toFixed(2)); field_grid.v_ms.push(+v.toFixed(2)); field_grid.wind_kmh.push(+(Math.hypot(u, v) * 3.6).toFixed(2)); field_grid.pressure_hpa.push(+pressure.toFixed(2)); field_grid.convergence_1e4_s.push(+(convergence * 1e4).toFixed(2)); field_grid.cloud_proxy.push(+(eyeMask * clamp(convergence * 1e4 / 6, 0, 1)).toFixed(3));
+  }
+  const isobars = Array.from({ length: 21 }, (_, i) => 850 + i * 10).map(pressure_hpa => {
+    const fraction = (pressure_hpa - p.central_pressure_hpa) / (p.ambient_pressure_hpa - p.central_pressure_hpa);
+    return { pressure_hpa, radius_km: fraction > 0 && fraction < 1 ? +(p.radius_max_wind_km / ((-Math.log(fraction)) ** (1 / b))).toFixed(1) : Infinity };
+  }).filter(row => row.radius_km <= 500);
+  return { radial_profile, track, azimuthal_profile, field_grid, isobars, wind_radii_km: { '34kt': radiusFor(34 * 1.852), '50kt': radiusFor(50 * 1.852), '64kt': radiusFor(64 * 1.852) }, shape_parameter_b: b, shape_parameter_limited: Math.abs(b - inferred) > 1e-9, peak_profile_wind_kmh, loss: p.exposed_assets_usd ? { status: 'illustrative', estimated_loss_usd: p.exposed_assets_usd * loss_fraction, loss_fraction } : { status: 'exposure_required', estimated_loss_usd: null, loss_fraction: null } };
 }
 function scheduleSimulation() { clearTimeout(simulationTimer); simulationTimer = setTimeout(runSimulation, 160); }
 async function runSimulation() {
@@ -181,7 +203,7 @@ async function runSimulation() {
   state.model = model || localSimulation(data); state.modelSource = source;
   const limited = state.model.shape_parameter_limited ? ' · PARAMETER LIMITED' : '';
   $('modelSummary').textContent = `${source}${limited}`;
-  globe.setStorm(state.scenario, state.model, false);
+  globe.setStorm(state.scenario, state.model, false); map.setStorm(state.scenario, state.model, false);
   renderAnalysis();
 }
 async function fetchLiveStorms() {
@@ -194,13 +216,14 @@ async function fetchLiveStorms() {
   renderScenarios();
 }
 async function fetchField(kind) {
-  if (fieldCache[kind]) { globe.setFieldData(kind, fieldCache[kind]); $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${fieldCache[kind].length} SAMPLES`; return; }
+  if (fieldCache[kind]) { globe.setFieldData(kind, fieldCache[kind]); map.setFieldData(kind, fieldCache[kind]); return; }
   let data = snapshot?.fields?.[kind];
   if (API_BASE) { try { const response = await fetch(`${API_BASE}/api/field?kind=${kind}`, { signal: AbortSignal.timeout(18000) }); if (response.ok) data = await response.json(); } catch { /* Keep snapshot. */ } }
   if (!data?.grid_points?.length) return;
   fieldCache[kind] = data.grid_points;
   globe.setFieldData(kind, data.grid_points);
-  if (state.layer === (kind === 'wind' ? 'winds' : 'ocean')) $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${data.grid_points.length} SAMPLES`;
+  map.setFieldData(kind, data.grid_points);
+  if (state.experiment === (kind === 'wind' ? 'winds' : 'ocean')) $('legendLabel').textContent = `OPEN-METEO ${kind.toUpperCase()} GRID · ${data.grid_points.length} SAMPLES`;
 }
 async function loadSnapshot() {
   try {
@@ -209,7 +232,7 @@ async function loadSnapshot() {
     snapshot = await response.json();
     if (snapshot.generated_at) $('snapshotStamp').textContent = `· SNAPSHOT ${snapshot.generated_at.slice(0, 16).replace('T', ' ')} UTC`;
     fetchLiveStorms();
-    if (state.layer === 'winds' || state.layer === 'ocean') fetchField(state.layer === 'winds' ? 'wind' : 'ocean');
+    if (state.experiment === 'winds' || state.experiment === 'ocean') fetchField(state.experiment === 'winds' ? 'wind' : 'ocean');
     runSimulation();
   } catch { /* A local development build may not have a generated snapshot. */ }
 }
@@ -332,7 +355,7 @@ function exportPng(canvas, key) {
 document.querySelectorAll('[data-experiment]').forEach(b => b.onclick = () => setExperiment(b.dataset.experiment));
 document.querySelectorAll('.view-tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 document.querySelectorAll('.rail-button[data-layer]').forEach(b => b.onclick = () => setLayer(b.dataset.layer));
-for (const id of ['intensity', 'pressure', 'seaTemp', 'stormSpeed', 'radiusMax', 'assetExposure']) $(id).addEventListener('input', updateControls);
+for (const id of ['intensity', 'pressure', 'seaTemp', 'stormSpeed', 'radiusMax', 'inflowAngle', 'translationFactor', 'assetExposure']) $(id).addEventListener('input', updateControls);
 $('chartMetric').onchange = drawChart;
 $('exportCsv').onclick = () => exportCsv();
 $('exportAllCsv').onclick = exportAllCsv;
@@ -343,14 +366,23 @@ document.querySelectorAll('[data-chart-png]').forEach(button => button.onclick =
 });
 $('resetControls').onclick = () => { $('assetExposure').value = ''; setControls(state.scenario); };
 $('refreshData').onclick = () => { fetchWeather(); fetchLiveStorms(); };
-$('resetGlobe').onclick = () => globe.reset(); $('zoomIn').onclick = () => globe.zoom(-1); $('zoomOut').onclick = () => globe.zoom(1);
+$('view3d').onclick = () => setDimension('3d');
+$('view2d').onclick = () => setDimension('2d');
+function setDimension(dimension) {
+  state.dimension = dimension;
+  $('globeCanvas').hidden = dimension !== '3d'; $('mapCanvas').hidden = dimension !== '2d';
+  for (const choice of ['3d', '2d']) { const button = $(`view${choice}`); button.classList.toggle('active', dimension === choice); button.setAttribute('aria-pressed', String(dimension === choice)); }
+  $('interactionHint').textContent = dimension === '2d' ? 'DRAG TO PAN · SCROLL TO ZOOM' : 'DRAG TO ROTATE · SCROLL TO ZOOM';
+}
+const activeScene = () => state.dimension === '2d' ? map : globe;
+$('resetGlobe').onclick = () => activeScene().reset(); $('zoomIn').onclick = () => activeScene().zoom(-1); $('zoomOut').onclick = () => activeScene().zoom(1);
 for (const [id, key] of [['windToggle', 'windTrails'], ['trackToggle', 'track']]) $(id).onclick = () => { state[key] = !state[key]; $(id).classList.toggle('on', state[key]); $(id).setAttribute('aria-checked', String(state[key])); key === 'track' ? globe.setTrack(state[key]) : globe.setWind(state[key]); };
 function setHour(value) {
   state.hour = clamp(value, 0, 72);
   $('timeline').value = state.hour; $('analysisTimeline').value = state.hour;
   const stamp = `HOUR ${state.hour.toFixed(1).padStart(4, '0')} / 72`;
   $('timelineStamp').textContent = stamp; $('analysisStamp').textContent = stamp;
-  globe.setHour(state.hour); drawChart();
+  globe.setHour(state.hour); map.setHour(state.hour); drawChart();
 }
 function setPlaying(playing) {
   state.playing = playing;
@@ -375,7 +407,7 @@ $('randomScenario').onclick = () => {
   const s = { id: `synthetic-${Date.now()}`, name: `Storm ${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`, region, type: 'Synthetic cyclone', lat: +(lat0 + (Math.random() - .5) * 9).toFixed(1), lon: +(lon0 + (Math.random() - .5) * 13).toFixed(1), wind, pressure, seaTemp: +(27 + Math.random() * 4).toFixed(1), speed: Math.round(8 + Math.random() * 27), rmax: Math.round(22 + Math.random() * 65), heading: Math.round(Math.random() * 360) };
   scenarios.push(s); selectScenario(s.id);
 };
-$('eyewallFocus').onclick = () => { globe.focus(state.scenario.lat, state.scenario.lon); globe.zoom(-1); globe.zoom(-1); };
+$('eyewallFocus').onclick = () => { activeScene().focus(state.scenario.lat, state.scenario.lon); activeScene().zoom(-1); activeScene().zoom(-1); };
 $('stormForm').onsubmit = e => { e.preventDefault(); const name = $('customName').value.trim(), lat = +$('customLat').value, lon = +$('customLon').value; if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return; const s = { id: `custom-${Date.now()}`, name, region: 'Custom location', type: 'Custom storm', lat, lon, wind: 130, pressure: 970, seaTemp: 29, speed: 18, rmax: 40, heading: 315 }; scenarios.push(s); $('stormDialog').close(); $('stormForm').reset(); selectScenario(s.id); };
 function tickClock() { $('utcClock').textContent = new Date().toISOString().slice(11, 16) + ' UTC'; }
 tickClock(); setInterval(tickClock, 30000); window.addEventListener('resize', drawChart);

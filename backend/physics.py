@@ -7,7 +7,7 @@ boundary-layer solver, bathymetry, or forecast skill. See README for equations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import asin, atan2, cos, exp, hypot, isfinite, pi, radians, sin, sqrt
+from math import asin, atan2, cos, exp, hypot, isfinite, log, pi, radians, sin, sqrt
 
 EARTH_RADIUS_M = 6_371_000.0
 AIR_DENSITY_KG_M3 = 1.15
@@ -27,6 +27,8 @@ class Storm:
     heading_deg: float = 315.0
     sea_temperature_c: float = 29.4
     exposed_assets_usd: float = 0.0
+    inflow_angle_deg: float = 18.0
+    translation_factor: float = 0.5
 
     @classmethod
     def from_dict(cls, data: dict) -> "Storm":
@@ -53,6 +55,8 @@ class Storm:
             raise ValueError("Invalid motion parameters")
         if not 20 <= obj.sea_temperature_c <= 35 or obj.exposed_assets_usd < 0:
             raise ValueError("Invalid sea temperature or exposure")
+        if not 0 <= obj.inflow_angle_deg <= 40 or not 0 <= obj.translation_factor <= 1:
+            raise ValueError("Invalid inflow angle or translation coupling")
         return obj
 
 
@@ -100,10 +104,56 @@ def wind_vector_ms(storm: Storm, east_km: float, north_km: float, b: float) -> t
     speed = tangential_wind_ms(storm, radius, b)
     sign = 1 if storm.latitude >= 0 else -1
     # Rotate the velocity 18° inward while preserving its modeled magnitude.
-    crossing = radians(18)
+    crossing = radians(storm.inflow_angle_deg)
     u = -sign * speed * cos(crossing) * north_km / radius - speed * sin(crossing) * east_km / radius
     v = sign * speed * cos(crossing) * east_km / radius - speed * sin(crossing) * north_km / radius
     return u, v
+
+
+def surface_field(storm: Storm, east_km: float, north_km: float, b: float) -> tuple[float, float, float]:
+    """Storm-relative boundary-layer wind plus a configurable translation component."""
+    u, v = wind_vector_ms(storm, east_km, north_km, b)
+    motion = storm.translation_factor * storm.translation_kmh / 3.6
+    direction = radians(storm.heading_deg)
+    return u + motion * sin(direction), v + motion * cos(direction), pressure_hpa(storm, hypot(east_km, north_km), b)
+
+
+def sample_field(storm: Storm, b: float, half_cells: int = 20, step_km: int = 25) -> dict:
+    """Sample the parametric surface field on a local tangent plane in SI units."""
+    size = 2 * half_cells + 1
+    fields = {name: [] for name in ("u_ms", "v_ms", "wind_kmh", "pressure_hpa", "convergence_1e4_s", "cloud_proxy")}
+    for j in range(-half_cells, half_cells + 1):
+        north = j * step_km
+        for i in range(-half_cells, half_cells + 1):
+            east = i * step_km
+            u, v, pressure = surface_field(storm, east, north, b)
+            scale = 5.0  # km finite-difference half-width
+            ux1 = surface_field(storm, east + scale, north, b)[0]
+            ux0 = surface_field(storm, east - scale, north, b)[0]
+            vy1 = surface_field(storm, east, north + scale, b)[1]
+            vy0 = surface_field(storm, east, north - scale, b)[1]
+            convergence = -((ux1 - ux0) + (vy1 - vy0)) / (2 * scale * 1000)
+            radius = hypot(east, north)
+            eye_mask = max(0.0, min(1.0, (radius / storm.radius_max_wind_km - 0.65) / 0.45))
+            cloud = eye_mask * max(0.0, min(1.0, convergence * 1e4 / 6))
+            for name, value in (("u_ms", u), ("v_ms", v), ("wind_kmh", hypot(u, v) * 3.6),
+                                ("pressure_hpa", pressure), ("convergence_1e4_s", convergence * 1e4),
+                                ("cloud_proxy", cloud)):
+                fields[name].append(round(value, 2 if name != "cloud_proxy" else 3))
+    return {"size": size, "step_km": step_km, "extent_km": half_cells * step_km,
+            "coordinate_system": "local east/north tangent plane centered on scenario track", **fields}
+
+
+def isobars(storm: Storm, b: float) -> list[dict]:
+    """Analytical radius for 10 hPa isobars of the Holland pressure field."""
+    result = []
+    for pressure in range(850, 1051, 10):
+        fraction = (pressure - storm.central_pressure_hpa) / (storm.ambient_pressure_hpa - storm.central_pressure_hpa)
+        if 0 < fraction < 1:
+            radius = storm.radius_max_wind_km / (-log(fraction)) ** (1 / b)
+            if radius <= 500:
+                result.append({"pressure_hpa": pressure, "radius_km": round(radius, 1)})
+    return result
 
 
 def outer_wind_radius_km(profile: list[dict], threshold_kmh: float) -> float | None:
@@ -161,8 +211,8 @@ def simulate(storm: Storm) -> dict:
         track.append({"hour": h, "latitude": round(lat, 5), "longitude": round(lon, 5)})
     max_model_wind = max(p["wind_kmh"] for p in profile)
     heading = radians(storm.heading_deg)
-    motion_east = 0.5 * storm.translation_kmh / 3.6 * sin(heading)
-    motion_north = 0.5 * storm.translation_kmh / 3.6 * cos(heading)
+    motion_east = storm.translation_factor * storm.translation_kmh / 3.6 * sin(heading)
+    motion_north = storm.translation_factor * storm.translation_kmh / 3.6 * cos(heading)
     azimuthal = []
     for bearing in range(0, 361, 5):
         angle = radians(bearing)
@@ -176,12 +226,12 @@ def simulate(storm: Storm) -> dict:
         "inputs": storm.__dict__, "shape_parameter_b": round(b, 4),
         "shape_parameter_limited": capped,
         "radial_profile": profile, "track": track,
-        "azimuthal_profile": azimuthal,
+        "azimuthal_profile": azimuthal, "field_grid": sample_field(storm, b), "isobars": isobars(storm, b),
         "wind_radii_km": {"34kt": outer_wind_radius_km(profile, 34 * 1.852),
                           "50kt": outer_wind_radius_km(profile, 50 * 1.852),
                           "64kt": outer_wind_radius_km(profile, 64 * 1.852)},
         "peak_profile_wind_kmh": round(max_model_wind, 2),
         "loss": loss_sensitivity(storm, max_model_wind),
-        "limitations": ["Not a weather forecast", "No land interaction or terrain", "No bathymetry or calibrated rainfall", "Translation asymmetry uses an assumed half-speed vector", "Economic loss requires user exposure"],
+        "limitations": ["Not a weather forecast", "No land interaction or terrain", "No bathymetry or calibrated rainfall", "Translation and inflow are configurable boundary-layer approximations", "Cloud proxy is convergence, not observed cloud cover", "Economic loss requires user exposure"],
     }
 

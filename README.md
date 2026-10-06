@@ -1,6 +1,6 @@
 # Physics and Astrophysics Lab — Atmosphere Lab
 
-PAL is a 3D, interactive Earth-systems experiment. The frontend uses Three.js and a complete NASA Blue Marble shaded-relief texture. A Python model evaluates an idealized tropical-cyclone wind field. A scheduled Python data build retrieves NHC storm status and Open-Meteo wind and ocean fields for GitHub Pages; the same Python code can run as an on-demand API. Open-Meteo also supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
+PAL is an interactive 3D globe and draggable 2D map for Earth-systems experiments. The frontend uses Three.js and a complete NASA Blue Marble shaded-relief texture. A Python model evaluates an idealized tropical-cyclone pressure and wind field. A scheduled Python data build retrieves NHC storm status and Open-Meteo wind and ocean fields for GitHub Pages; the same Python code can run as an on-demand API. Open-Meteo also supplies nearby hourly weather forecasts. All data and simulations are labeled in the interface.
 
 ## Run locally
 
@@ -22,6 +22,12 @@ python -m backend.cli --parameters storm.json --output result.json
 
 ## Physics
 
+### Shared 2D and 3D storm field
+
+The Python model samples surface wind components, wind speed, pressure, finite-difference convergence, and a dimensionless cloud proxy on a 41 by 41 local tangent-plane grid at 25 km spacing (1,000 km across). The 2D map draws wind and pressure shading from those samples, analytical 10 hPa isobars, a track, and advected wind streaks. The 3D globe uses the same wind samples for its local field and moving particles. Both views follow the same timeline; the 2D map also supports drag panning and wheel zoom.
+
+The surface wind crosses the isobars at a user-selected inward angle from 0 to 40 degrees. A user-selected fraction from 0 to 1 of storm translation is added to the wind vector to show motion-related asymmetry. These are explicit boundary-layer approximations, not a terrain-aware fluid simulation. The cloud proxy comes from positive horizontal convergence with an eye mask; it is **not** satellite-observed cloud cover or a rainfall forecast. Wind particles are animated passive markers. The static Blue Marble image shows detailed land and ocean, not a current satellite frame.
+
 The radial pressure and wind fields use a simplified, axisymmetric [Holland (1980)](https://doi.org/10.1175/1520-0493(1980)108%3C1212:AAMOTW%3E2.0.CO;2) model. At distance `r` from the center, with central pressure `p_c`, ambient pressure `p_n`, radius of maximum wind `R`, and shape factor `B`:
 
 ```text
@@ -32,11 +38,11 @@ V_surface(r) = 0.9 V_gradient(r)
 f = 2 Ω sin(latitude)
 ```
 
-`Δp` is in pascals, `ρ = 1.15 kg/m³`, and `Ω = 7.2921159 × 10⁻⁵ rad/s`. The 0.9 surface reduction is an explicit simplifying assumption. `B` is inferred from the requested maximum wind and pressure deficit at `R`; if it falls outside 0.5–3.5, the model limits it and marks the result. Surface vectors use cyclonic rotation and an assumed 18° inward crossing angle. The eye is calm at the exact center in this axisymmetric model.
+`Δp` is in pascals, `ρ = 1.15 kg/m³`, and `Ω = 7.2921159 × 10⁻⁵ rad/s`. The 0.9 surface reduction is an explicit simplifying assumption. `B` is inferred from the requested maximum wind and pressure deficit at `R`; if it falls outside 0.5–3.5, the model limits it and marks the result. Surface vectors use cyclonic rotation and a configurable inward crossing angle. The eye is calm at the exact center in this axisymmetric model.
 
-The timeline moves the center along a spherical great circle at **constant user-set speed and heading**. It is a scenario path, never an official track forecast. Sea temperature is displayed as context; this model does not include a thermodynamic intensity equation or derive wind from sea temperature. It also lacks land interaction, vertical structure, evolving intensity, eyewall replacement, rainfall dynamics, and bathymetry. A kinematic asymmetry preview adds half the chosen translation velocity to the surface wind vector; this factor is an assumption, not an NHC wind-radii analysis. The 34, 50, and 64 knot outer radii are interpolated from the symmetric profile, not official quadrant radii.
+The timeline moves the center along a spherical great circle at **constant user-set speed and heading**. It is a scenario path, never an official track forecast. Sea temperature is displayed as context; this model does not include a thermodynamic intensity equation or derive wind from sea temperature. It also lacks land interaction, vertical structure, evolving intensity, eyewall replacement, rainfall dynamics, and bathymetry. A kinematic asymmetry preview adds a configurable fraction of the chosen translation velocity to the surface wind vector; this factor is an assumption, not an NHC wind-radii analysis. The 34, 50, and 64 knot outer radii are interpolated from the symmetric profile, not official quadrant radii.
 
-Surface wind particles are integrated through the modeled tangential and 18° inward flow at 45× model time for visibility; they are passive markers, not a numerical fluid solver. Raised, translucent spiral cloud bands rotate around the eye at 18× model time and use the selected radius of maximum wind; their shape is illustrative, not retrieved cloud structure. Playback speed (0.5× to 4×) changes presentation rate, not the physical storm motion. The Earth backdrop combines sourced NASA imagery with shaded terrain relief.
+Surface wind particles are integrated through the modeled tangential and configurable inward flow at 45× model time for visibility; they are passive markers, not a numerical fluid solver. Raised, translucent spiral cloud bands rotate around the eye at 18× model time and use the selected radius of maximum wind; their shape is illustrative, not retrieved cloud structure. Playback speed (0.5× to 4×) changes presentation rate, not the physical storm motion. The Earth backdrop combines sourced NASA imagery with shaded terrain relief.
 
 The analysis tab graphs pressure, wind, pressure gradient, kinetic energy density `ρV²/2`, kinetic energy flux `ρV³/2`, and vertical relative vorticity `(1/r) d(rV)/dr` by radius. It also graphs the kinematic eyewall wind by bearing and available Open-Meteo hourly wind, gust, pressure, precipitation, temperature, humidity, and cloud cover. These are local model or nearby forecast quantities, not comprehensive environmental measurements. The playback reveals model curves and weather hours; it does not change the model's constant inputs. Every chart can be exported as PNG or CSV, and a long-format CSV includes all available series.
 

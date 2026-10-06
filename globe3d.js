@@ -28,12 +28,12 @@ export function createGlobe(canvas, state) {
   renderer.toneMappingExposure = 1.35;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(36, 1, .01, 40);
-  camera.position.copy(point(state.scenario.lat, state.scenario.lon).multiplyScalar(3.6));
+  camera.position.copy(point(state.scenario.lat, state.scenario.lon).multiplyScalar(3.15));
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = .06;
   controls.enablePan = false;
-  controls.minDistance = 1.45;
+  controls.minDistance = 1.16;
   controls.maxDistance = 7;
   controls.rotateSpeed = .65;
   controls.zoomSpeed = .85;
@@ -77,7 +77,7 @@ export function createGlobe(canvas, state) {
   stormGroup.add(halo);
   let scenario = state.scenario, model = null, mode = 'typhoon', layer = 'satellite', hour = 0;
   const fieldData = { wind: null, ocean: null };
-  let trackLine, windPoints, windParticleState, lastWindTick = 0, cloudBands, cloudOrigin;
+  let trackLine, windPoints, windParticleState, lastWindTick = 0, cloudBands, cloudOrigin, fieldVisual, fieldOrigin;
 
   function clearObject(obj) {
     if (!obj) return;
@@ -113,7 +113,7 @@ export function createGlobe(canvas, state) {
   function rebuildPressure() {
     for (const child of [...pressureGroup.children]) clearObject(child);
     const center = centerAtHour(hour);
-    for (const radiusKm of [45, 90, 150, 240, 350]) {
+    for (const radiusKm of (model?.isobars?.length ? model.isobars.map(row => row.radius_km) : [45, 90, 150, 240, 350])) {
       const vertices = [];
       for (let i = 0; i <= 120; i++) {
         const angle = i / 120 * Math.PI * 2;
@@ -177,6 +177,27 @@ export function createGlobe(canvas, state) {
     cloudBands = new THREE.Points(geometry, new THREE.PointsMaterial({ vertexColors: true, size: .017, sizeAttenuation: true, transparent: true, opacity: .48, depthWrite: false }));
     stormGroup.add(cloudBands);
   }
+  function rebuildFieldVisual() {
+    clearObject(fieldVisual);
+    const grid = model?.field_grid;
+    if (!grid) return;
+    const center = centerAtHour(hour); fieldOrigin = center;
+    const positions = [], colors = [];
+    for (let j = 0; j < grid.size; j++) for (let i = 0; i < grid.size; i++) {
+      const east = (i - (grid.size - 1) / 2) * grid.step_km;
+      const north = (j - (grid.size - 1) / 2) * grid.step_km;
+      const lat = center.latitude + north / 111.2;
+      const lon = center.longitude + east / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
+      const p = point(lat, lon, .025), speed = grid.wind_kmh[j * grid.size + i];
+      const color = new THREE.Color().setHSL(.55 - .49 * clamp(speed / 260, 0, 1), .9, .5);
+      positions.push(p.x, p.y, p.z); colors.push(color.r, color.g, color.b);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    fieldVisual = new THREE.Points(geometry, new THREE.PointsMaterial({ vertexColors: true, size: .025, sizeAttenuation: true, transparent: true, opacity: .65, depthWrite: false }));
+    stormGroup.add(fieldVisual);
+  }
   function updateWind(t) {
     if (!windPoints || !state.windTrails || mode !== 'typhoon') return;
     const arr = windPoints.geometry.attributes.position.array;
@@ -184,7 +205,7 @@ export function createGlobe(canvas, state) {
     const profile = model?.radial_profile || [];
     const dt = lastWindTick ? Math.min(.08, (t - lastWindTick) / 1000) : 0;
     lastWindTick = t;
-    const heading = scenario.heading * RAD, steering = scenario.speed / 3.6 * .5;
+    const heading = scenario.heading * RAD, steering = scenario.speed / 3.6 * (model?.inputs?.translation_factor ?? .5);
     const northSign = center.latitude >= 0 ? 1 : -1;
     for (let i = 0; i < arr.length / 3; i++) {
       let east = windParticleState[i * 2], north = windParticleState[i * 2 + 1];
@@ -198,9 +219,15 @@ export function createGlobe(canvas, state) {
         const p = profile.find(x => x.radius_km >= radiusKm) || profile[profile.length - 1];
         wind = p.wind_kmh;
       }
-      const speed = wind / 3.6, tangential = Math.cos(18 * RAD) * speed, inward = Math.sin(18 * RAD) * speed;
-      const u = -northSign * tangential * north / radiusKm - inward * east / radiusKm + steering * Math.sin(heading);
-      const v = northSign * tangential * east / radiusKm - inward * north / radiusKm + steering * Math.cos(heading);
+      const speed = wind / 3.6, crossing = (model?.inputs?.inflow_angle_deg ?? 18) * RAD, tangential = Math.cos(crossing) * speed, inward = Math.sin(crossing) * speed;
+      let u = -northSign * tangential * north / radiusKm - inward * east / radiusKm + steering * Math.sin(heading);
+      let v = northSign * tangential * east / radiusKm - inward * north / radiusKm + steering * Math.cos(heading);
+      const grid = model?.field_grid;
+      if (grid && Math.abs(east) <= grid.extent_km && Math.abs(north) <= grid.extent_km) {
+        const ix = clamp(Math.round(east / grid.step_km + (grid.size - 1) / 2), 0, grid.size - 1);
+        const iy = clamp(Math.round(north / grid.step_km + (grid.size - 1) / 2), 0, grid.size - 1);
+        const index = iy * grid.size + ix; u = grid.u_ms[index]; v = grid.v_ms[index];
+      }
       east += u * dt * 45 / 1000; north += v * dt * 45 / 1000;
       windParticleState[i * 2] = east; windParticleState[i * 2 + 1] = north;
       const lat = center.latitude + north / 111.2;
@@ -212,7 +239,7 @@ export function createGlobe(canvas, state) {
   }
   function buildGlobalField() {
     for (const child of [...fieldGroup.children]) clearObject(child);
-    const kind = layer === 'winds' ? 'wind' : mode;
+    const kind = mode === 'winds' ? 'wind' : mode;
     const samples = fieldData[kind];
     if (samples?.length) {
       for (const sample of samples) {
@@ -243,7 +270,7 @@ export function createGlobe(canvas, state) {
   function setFieldData(kind, points) { fieldData[kind] = points; buildGlobalField(); }
   function setStorm(next, nextModel = null, shouldFocus = true) {
     scenario = next; model = nextModel;
-    rebuildTrack(); rebuildPressure(); rebuildWind(); rebuildCloudBands();
+    rebuildTrack(); rebuildPressure(); rebuildWind(); rebuildCloudBands(); rebuildFieldVisual();
     if (shouldFocus) focus(next.lat, next.lon);
   }
   function focus(lat, lon) {
@@ -256,14 +283,14 @@ export function createGlobe(canvas, state) {
     mode = nextMode; layer = nextLayer;
     stormGroup.visible = mode === 'typhoon' || mode === 'clouds';
     pressureGroup.visible = mode === 'typhoon' && layer === 'pressure';
-    fieldGroup.visible = mode === 'winds' || mode === 'ocean' || layer === 'winds';
+    fieldGroup.visible = mode === 'winds' || mode === 'ocean';
     buildGlobalField();
   }
   function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); }
   function setTrack(enabled) { if (trackLine) trackLine.visible = enabled; }
   function setWind(enabled) { if (windPoints) windPoints.visible = enabled; }
-  function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.6); controls.update(); }
-  function zoom(delta) { camera.position.multiplyScalar(delta < 0 ? .85 : 1.15); camera.position.clampLength(1.45, 7); controls.update(); }
+  function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.15); controls.update(); }
+  function zoom(delta) { camera.position.multiplyScalar(delta < 0 ? .85 : 1.15); camera.position.clampLength(1.16, 7); controls.update(); }
   const resize = () => {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -284,6 +311,7 @@ export function createGlobe(canvas, state) {
     if (trackLine) trackLine.visible = mode === 'typhoon' && state.track;
     if (windPoints) windPoints.visible = mode === 'typhoon' && state.windTrails;
     if (cloudBands) cloudBands.visible = mode === 'clouds' || (mode === 'typhoon' && layer === 'satellite');
+    if (fieldVisual) fieldVisual.visible = mode === 'typhoon' && layer === 'winds';
     if (cloudBands && cloudOrigin) {
       const center = centerAtHour(hour);
       const axis = point(center.latitude, center.longitude).normalize();
@@ -292,6 +320,10 @@ export function createGlobe(canvas, state) {
       const radiusMetres = (Number(document.getElementById('radiusMax').value) || 40) * 1000;
       const angle = (center.latitude >= 0 ? 1 : -1) * t / 1000 * 18 * surfaceSpeed / radiusMetres;
       cloudBands.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(axis, angle)).multiply(move);
+    }
+    if (fieldVisual && fieldOrigin) {
+      const center = centerAtHour(hour);
+      fieldVisual.quaternion.setFromUnitVectors(point(fieldOrigin.latitude, fieldOrigin.longitude).normalize(), point(center.latitude, center.longitude).normalize());
     }
     updateWind(t);
     fieldGroup.rotation.y = 0;
