@@ -1,0 +1,236 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const RAD = Math.PI / 180;
+const R = 1;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function point(lat, lon, altitude = 0) {
+  const phi = lat * RAD, lam = lon * RAD, radius = R + altitude;
+  return new THREE.Vector3(radius * Math.cos(phi) * Math.cos(lam), radius * Math.sin(phi), -radius * Math.cos(phi) * Math.sin(lam));
+}
+function yesterday() { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
+function nasaUrl(layer, date) {
+  const time = date ? `&TIME=${date}` : '';
+  const width = window.innerWidth >= 1400 ? 4096 : 2048;
+  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&FORMAT=image/jpeg&WIDTH=${width}&HEIGHT=${width / 2}&CRS=EPSG:4326&BBOX=-90,-180,90,180${time}`;
+}
+function buildStars() {
+  const vertices = [];
+  for (let i = 0; i < 1400; i++) {
+    const t = i * 2.399963229728653, y = 1 - 2 * (i + .5) / 1400;
+    const d = Math.sqrt(1 - y * y), radius = 7 + (i % 13) * .21;
+    vertices.push(radius * d * Math.cos(t), radius * y, radius * d * Math.sin(t));
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  return new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0x8db7c9, size: .025, sizeAttenuation: true, transparent: true, opacity: .75 }));
+}
+
+export function createGlobe(canvas, state) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.35;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(36, 1, .01, 40);
+  camera.position.copy(point(state.scenario.lat, state.scenario.lon).multiplyScalar(3.6));
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = .06;
+  controls.enablePan = false;
+  controls.minDistance = 1.45;
+  controls.maxDistance = 7;
+  controls.rotateSpeed = .65;
+  controls.zoomSpeed = .85;
+  scene.add(new THREE.AmbientLight(0x6e9eb6, 1.8));
+  const sun = new THREE.DirectionalLight(0xfff2db, 3.1);
+  sun.position.set(4, 2, 5);
+  scene.add(sun, buildStars());
+
+  const earth = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 96), new THREE.MeshStandardMaterial({ color: 0x4e8798, roughness: .95, metalness: 0 }));
+  scene.add(earth);
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+  const applyTexture = (url, onFail) => loader.load(url, texture => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    earth.material.map = texture;
+    earth.material.color.setHex(0xffffff);
+    earth.material.needsUpdate = true;
+    document.getElementById('imageryDate').textContent = url.includes('TIME=') ? yesterday() : 'NASA BLUE MARBLE';
+  }, undefined, onFail);
+  applyTexture(nasaUrl('MODIS_Terra_CorrectedReflectance_TrueColor', yesterday()), () => applyTexture(nasaUrl('BlueMarble_NextGeneration'), () => {
+    document.getElementById('imageryDate').textContent = 'TEXTURE UNAVAILABLE';
+  }));
+
+  const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.065, 64, 48), new THREE.ShaderMaterial({
+    transparent: true, side: THREE.BackSide, depthWrite: false,
+    uniforms: { glowColor: { value: new THREE.Color(0x4fcde1) } },
+    vertexShader: 'varying vec3 vNormal; varying vec3 vView; void main(){ vec4 world = modelMatrix * vec4(position,1.0); vNormal = normalize(mat3(modelMatrix)*normal); vView = normalize(cameraPosition-world.xyz); gl_Position=projectionMatrix*viewMatrix*world; }',
+    fragmentShader: 'uniform vec3 glowColor; varying vec3 vNormal; varying vec3 vView; void main(){ float edge=pow(1.0-max(0.0,dot(normalize(vNormal),normalize(vView))),2.2); gl_FragColor=vec4(glowColor,edge*.65); }'
+  }));
+  scene.add(atmosphere);
+
+  const stormGroup = new THREE.Group();
+  const pressureGroup = new THREE.Group();
+  const fieldGroup = new THREE.Group();
+  scene.add(stormGroup, pressureGroup, fieldGroup);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(.013, 16, 12), new THREE.MeshBasicMaterial({ color: 0xc9fff1 }));
+  stormGroup.add(eye);
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(.035, 20, 16), new THREE.MeshBasicMaterial({ color: 0x4ee5d0, transparent: true, opacity: .26, depthWrite: false }));
+  stormGroup.add(halo);
+  let scenario = state.scenario, model = null, mode = 'typhoon', layer = 'satellite', hour = 0;
+  const fieldData = { wind: null, ocean: null };
+  let trackLine, windPoints;
+
+  function clearObject(obj) {
+    if (!obj) return;
+    obj.parent?.remove(obj);
+    obj.geometry?.dispose();
+    obj.material?.dispose();
+  }
+  function makeLine(vertices, color, opacity = .6) {
+    const geo = new THREE.BufferGeometry().setFromPoints(vertices);
+    return new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+  }
+  function trackData() {
+    if (model?.track?.length) return model.track;
+    return Array.from({ length: 25 }, (_, i) => ({ hour: i * 3, latitude: scenario.lat + i * .25, longitude: scenario.lon - i * .4 }));
+  }
+  function positionAtHour(h) {
+    const track = trackData(), i = clamp(Math.round(h / 3), 0, track.length - 1);
+    const p = track[i];
+    return point(p.latitude, p.longitude, .029);
+  }
+  function rebuildTrack() {
+    clearObject(trackLine);
+    trackLine = makeLine(trackData().map(p => point(p.latitude, p.longitude, .018)), 0xa5f2df, .7);
+    stormGroup.add(trackLine);
+  }
+  function rebuildPressure() {
+    for (const child of [...pressureGroup.children]) clearObject(child);
+    const center = trackData()[clamp(Math.round(hour / 3), 0, trackData().length - 1)];
+    for (const radiusKm of [45, 90, 150, 240, 350]) {
+      const vertices = [];
+      for (let i = 0; i <= 120; i++) {
+        const angle = i / 120 * Math.PI * 2;
+        const lat = center.latitude + Math.sin(angle) * radiusKm / 111.2;
+        const lon = center.longitude + Math.cos(angle) * radiusKm / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
+        vertices.push(point(lat, lon, .026));
+      }
+      pressureGroup.add(makeLine(vertices, 0x8fe7d2, .5));
+    }
+  }
+  function rebuildWind() {
+    clearObject(windPoints);
+    const count = 1100;
+    const positions = new Float32Array(count * 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.PointsMaterial({ color: 0x9cf6da, size: .012, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false });
+    windPoints = new THREE.Points(geometry, material);
+    stormGroup.add(windPoints);
+  }
+  function updateWind(t) {
+    if (!windPoints || !state.windTrails || mode !== 'typhoon') return;
+    const arr = windPoints.geometry.attributes.position.array;
+    const track = trackData(), center = track[clamp(Math.round(hour / 3), 0, track.length - 1)];
+    const profile = model?.radial_profile || [];
+    for (let i = 0; i < arr.length / 3; i++) {
+      const f = (i % 73) / 72, radiusKm = 12 + 330 * f;
+      let wind = Number(document.getElementById('intensity').value) * Math.exp(-radiusKm / 250);
+      if (profile.length) {
+        const p = profile.find(x => x.radius_km >= radiusKm) || profile[profile.length - 1];
+        wind = p.wind_kmh;
+      }
+      const angularRate = (wind / 3.6) / (radiusKm * 1000);
+      const angle = i * 2.3999632297 + (t / 1000) * 25 * angularRate * (center.latitude >= 0 ? 1 : -1);
+      const lat = center.latitude + Math.sin(angle) * radiusKm / 111.2;
+      const lon = center.longitude + Math.cos(angle) * radiusKm / (111.2 * Math.max(.2, Math.cos(center.latitude * RAD)));
+      const p = point(lat, lon, .022 + .004 * Math.sin(i * 1.8 + t * .003));
+      arr[i * 3] = p.x; arr[i * 3 + 1] = p.y; arr[i * 3 + 2] = p.z;
+    }
+    windPoints.geometry.attributes.position.needsUpdate = true;
+  }
+  function buildGlobalField() {
+    for (const child of [...fieldGroup.children]) clearObject(child);
+    const kind = layer === 'winds' ? 'wind' : mode;
+    const samples = fieldData[kind];
+    if (samples?.length) {
+      for (const sample of samples) {
+        const bearing = (sample.direction_deg + (kind === 'wind' ? 180 : 0)) * RAD;
+        const length = clamp(kind === 'wind' ? sample.speed_kmh / 12 : sample.speed_kmh * 2.5, .7, 3.5);
+        const lat1 = sample.latitude, lon1 = sample.longitude;
+        const lat2 = clamp(lat1 + Math.cos(bearing) * length, -86, 86);
+        const lon2 = lon1 + Math.sin(bearing) * length / Math.max(.25, Math.cos(lat1 * RAD));
+        const tip = point(lat2, lon2, .03), tail = point(lat1, lon1, .03);
+        const color = kind === 'wind' ? 0x9df1d5 : 0x5bdbe7;
+        fieldGroup.add(makeLine([tail, tip], color, .85));
+        const spread = .55;
+        fieldGroup.add(makeLine([point(lat2 - Math.cos(bearing - spread) * length * .3, lon2 - Math.sin(bearing - spread) * length * .3, .03), tip, point(lat2 - Math.cos(bearing + spread) * length * .3, lon2 - Math.sin(bearing + spread) * length * .3, .03)], color, .85));
+      }
+      return;
+    }
+    if (kind === 'clouds') return;
+    const count = 24;
+    for (let j = 0; j < count; j++) {
+      const lat0 = -72 + j * 144 / (count - 1), vertices = [];
+      for (let lon = -180; lon <= 180; lon += 2) {
+        const waviness = kind === 'ocean' ? 5 : 1.5;
+        vertices.push(point(lat0 + waviness * Math.sin(lon * RAD * 2.6 + j * .7), lon, .014 + j % 3 * .002));
+      }
+      fieldGroup.add(makeLine(vertices, kind === 'ocean' ? 0x49d4dc : 0x8ce8cc, .35));
+    }
+  }
+  function setFieldData(kind, points) { fieldData[kind] = points; buildGlobalField(); }
+  function setStorm(next, nextModel = null, shouldFocus = true) {
+    scenario = next; model = nextModel;
+    rebuildTrack(); rebuildPressure(); rebuildWind();
+    if (shouldFocus) focus(next.lat, next.lon);
+  }
+  function focus(lat, lon) {
+    const dist = camera.position.length();
+    camera.position.copy(point(lat, lon).multiplyScalar(dist));
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+  function setMode(nextMode, nextLayer) {
+    mode = nextMode; layer = nextLayer;
+    stormGroup.visible = mode === 'typhoon';
+    pressureGroup.visible = mode === 'typhoon' && layer === 'pressure';
+    fieldGroup.visible = mode === 'winds' || mode === 'ocean' || layer === 'winds';
+    buildGlobalField();
+  }
+  function setHour(nextHour) { hour = nextHour; if (pressureGroup.visible) rebuildPressure(); }
+  function setTrack(enabled) { if (trackLine) trackLine.visible = enabled; }
+  function setWind(enabled) { if (windPoints) windPoints.visible = enabled; }
+  function reset() { focus(scenario.lat, scenario.lon); camera.position.normalize().multiplyScalar(3.6); controls.update(); }
+  function zoom(delta) { camera.position.multiplyScalar(delta < 0 ? .85 : 1.15); camera.position.clampLength(1.45, 7); controls.update(); }
+  const resize = () => {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    renderer.setSize(rect.width, rect.height, false);
+    camera.aspect = rect.width / rect.height;
+    camera.updateProjectionMatrix();
+  };
+  new ResizeObserver(resize).observe(canvas);
+  resize();
+  setStorm(scenario);
+  setMode('typhoon', 'satellite');
+  function animate(t) {
+    requestAnimationFrame(animate);
+    controls.update();
+    eye.position.copy(positionAtHour(hour));
+    halo.position.copy(eye.position);
+    halo.scale.setScalar(1 + .16 * Math.sin(t * .003));
+    if (trackLine) trackLine.visible = state.track;
+    if (windPoints) windPoints.visible = state.windTrails;
+    updateWind(t);
+    fieldGroup.rotation.y = 0;
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(animate);
+  return { setStorm, setMode, setFieldData, setHour, setTrack, setWind, reset, zoom, focus };
+}
+

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#071523" />
+  <title>PAL — Atmosphere Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="PAL home"><span class="brand-mark">✳</span><span><strong>PAL</strong><small>PHYSICS & ASTROPHYSICS LAB</small></span></a>
+      <div class="top-center"><span class="live-pulse"></span> ATMOSPHERE LAB <span class="top-divider"></span> EXPERIMENT 01 / 04</div>
+      <div class="top-actions"><span id="utcClock">--:-- UTC</span><a class="github-link" href="./README.md" aria-label="Data and methods">↗ <span>METHODS</span></a></div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="side-section-label">EXPERIMENTS <span>01 — 04</span></div>
+        <nav class="experiment-nav" aria-label="Experiments">
+          <button class="experiment active" data-experiment="typhoon"><span class="experiment-icon">◉</span><span><strong>Typhoon dynamics</strong><small>Storm systems & wind fields</small></span><span class="nav-arrow">↗</span></button>
+          <button class="experiment" data-experiment="winds"><span class="experiment-icon">≋</span><span><strong>Global winds</strong><small>Atmospheric circulation</small></span><span class="nav-arrow">↗</span></button>
+          <button class="experiment" data-experiment="ocean"><span class="experiment-icon">≈</span><span><strong>Ocean currents</strong><small>Flow & temperature</small></span><span class="nav-arrow">↗</span></button>
+          <button class="experiment" data-experiment="clouds"><span class="experiment-icon">☁</span><span><strong>Cloud systems</strong><small>Satellite observations</small></span><span class="nav-arrow">↗</span></button>
+        </nav>
+
+        <div class="side-section-label scenarios-label">SCENARIOS <button id="newScenario" title="Create a storm">＋ NEW</button></div>
+        <div class="scenario-list" id="scenarioList"></div>
+
+        <div class="sidebar-bottom"><div class="source-dot"></div><div><strong>DATA STATUS</strong><span id="sidebarStatus">Connecting to weather data</span></div><button id="refreshData" title="Refresh observations">↻</button></div>
+      </aside>
+
+      <main class="main-content">
+        <div class="title-row"><div><div class="eyebrow"><span class="eyebrow-line"></span> INTERACTIVE EARTH SYSTEMS</div><h1 id="pageTitle">Typhoon dynamics<span class="title-period">.</span></h1><p id="pageSubtitle">Explore the forces that shape tropical cyclones.</p></div><div class="title-meta"><span>01 / 04</span><strong>EARTH SYSTEMS</strong></div></div>
+
+        <div class="view-tabs" role="tablist" aria-label="Views"><button class="view-tab active" data-tab="simulation" role="tab" aria-selected="true">◉ <span>Simulation</span></button><button class="view-tab" data-tab="analysis" role="tab" aria-selected="false">▥ <span>Live analysis</span></button><div class="tab-spacer"></div><div class="connection"><span class="connection-dot"></span><span id="connectionText">LOADING DATA</span></div></div>
+
+        <section id="simulationView" class="view simulation-view">
+          <div class="globe-panel">
+            <canvas id="globeCanvas" aria-label="Interactive 3D globe showing the current atmospheric scenario"></canvas>
+            <div class="globe-topline"><div><span class="panel-kicker">VISUALIZATION / 001</span><h2 id="sceneTitle">Western Pacific</h2></div><div class="coordinate-pill" id="coordinates">18.8°N · 126.2°E</div></div>
+            <div class="globe-left-rail"><button class="rail-button active" data-layer="satellite" title="Satellite imagery">◐</button><button class="rail-button" data-layer="winds" title="Wind field">≋</button><button class="rail-button" data-layer="pressure" title="Pressure field">◎</button><span class="rail-divider"></span><button class="rail-button" id="resetGlobe" title="Reset globe">⌖</button></div>
+            <div class="globe-bottomline"><div class="legend"><span class="legend-dot"></span><span id="legendLabel">NASA SATELLITE IMAGERY</span><small id="imageryDate">LATEST AVAILABLE</small></div><div class="globe-hint">DRAG TO ROTATE · SCROLL TO ZOOM</div></div>
+            <div class="zoom-controls"><button id="zoomIn" aria-label="Zoom in">＋</button><button id="zoomOut" aria-label="Zoom out">−</button></div>
+          </div>
+
+          <aside class="controls-panel">
+            <div class="control-heading"><span class="panel-kicker">SIMULATION CONTROLS</span><button id="resetControls">RESET ↺</button></div>
+            <div class="selected-storm"><div class="storm-orb">◉</div><div><span>ACTIVE SCENARIO</span><h2 id="stormName">Pacific vortex</h2><p id="stormType">Tropical cyclone · Western Pacific</p></div><div class="category-badge" id="categoryBadge">CAT 3</div></div>
+            <div class="control-body">
+              <div class="control-group"><div class="control-label"><label for="intensity">Wind intensity</label><strong id="intensityValue">184 <small>km/h</small></strong></div><input type="range" id="intensity" min="40" max="300" value="184" /><div class="range-labels"><span>TROPICAL STORM</span><span>SUPER TYPHOON</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="pressure">Central pressure</label><strong id="pressureValue">942 <small>hPa</small></strong></div><input type="range" id="pressure" min="880" max="1010" value="942" /><div class="range-labels"><span>INTENSE</span><span>WEAK</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="seaTemp">Sea temperature · context</label><strong id="seaTempValue">29.4 <small>°C</small></strong></div><input type="range" id="seaTemp" min="22" max="34" value="29.4" step="0.1" /><div class="range-labels"><span>COOL</span><span>WARM</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="stormSpeed">Translation speed</label><strong id="stormSpeedValue">22 <small>km/h</small></strong></div><input type="range" id="stormSpeed" min="2" max="60" value="22" /><div class="range-labels"><span>SLOW</span><span>FAST</span></div></div>
+              <div class="control-group"><div class="control-label"><label for="radiusMax">Radius of maximum wind</label><strong id="radiusMaxValue">38 <small>km</small></strong></div><input type="range" id="radiusMax" min="10" max="150" value="38" /><div class="range-labels"><span>COMPACT</span><span>WIDE</span></div></div>
+              <div class="toggle-row"><div><strong>Wind particle trails</strong><small>Animated flow around the eye</small></div><button id="windToggle" class="switch on" role="switch" aria-checked="true" aria-label="Wind particle trails"><span></span></button></div>
+              <div class="toggle-row"><div><strong>Projected track</strong><small>Illustrative 72-hour path</small></div><button id="trackToggle" class="switch on" role="switch" aria-checked="true" aria-label="Projected track"><span></span></button></div>
+            </div>
+            <div class="control-footer"><span>MODEL OUTPUT</span><strong id="modelSummary">Calculating wind field</strong><p>Holland-type open-water wind field. Sea temperature is contextual and does not drive this radial model.</p></div>
+          </aside>
+
+          <div class="timeline-panel"><div class="timeline-header"><div><span class="panel-kicker">TEMPORAL EXPLORER</span><strong>Idealized great-circle motion</strong></div><div class="timeline-actions"><button id="playButton" aria-label="Play timeline">▶</button><span id="timelineStamp">HOUR 00 / 72</span></div></div><div class="timeline-track"><span>NOW</span><input id="timeline" type="range" min="0" max="72" value="0" step="1" /><span>+72H</span></div><div class="timeline-footer"><span>INITIAL POSITION</span><span>CONSTANT SPEED & HEADING</span><span>SCENARIO</span></div></div>
+        </section>
+
+        <section id="analysisView" class="view analysis-view" hidden>
+          <div class="analysis-header"><div><span class="panel-kicker">WEATHER DATA + MODEL</span><h2>Storm intelligence</h2><p>Compare nearby hourly weather with scenario outputs and impact estimates.</p></div><button id="exportCsv">↓ EXPORT CSV</button></div>
+          <div class="metric-grid" id="metricGrid"></div>
+          <div class="analysis-grid"><div class="chart-card"><div class="card-heading"><div><span class="panel-kicker" id="chartSource">RADIAL WIND MODEL</span><h3 id="chartTitle">Storm structure</h3></div><select id="chartMetric" aria-label="Chart metric"><option value="wind_kmh">Surface wind profile</option><option value="pressure_hpa">Pressure profile</option><option value="weather_wind">Nearby forecast wind</option><option value="weather_pressure">Nearby forecast pressure</option><option value="weather_rain">Nearby forecast rain</option></select></div><canvas id="chartCanvas" aria-label="Scientific analysis chart"></canvas><div class="chart-axis" id="chartAxis"><span>0 KM</span><span>250 KM</span><span>500 KM</span></div></div><div class="impact-card"><span class="panel-kicker">ECONOMIC SENSITIVITY</span><h3>Exposure estimate</h3><div class="impact-total" id="damageEstimate">—</div><div class="impact-caption">ILLUSTRATIVE DIRECT DAMAGE</div><label class="exposure-label" for="assetExposure">ASSUMED EXPOSED ASSETS (USD)</label><input id="assetExposure" type="number" min="0" step="100000000" placeholder="Enter a value" /><div class="impact-bars" id="impactBars"></div><p>A transparent wind-only sensitivity curve applies to your asset input. Without location-specific exposure and vulnerability data, this is not an economic forecast.</p></div></div>
+          <div class="method-card"><div><span class="panel-kicker">DATA PROVENANCE</span><h3>What is sourced, what is modeled</h3></div><div class="method-columns"><p><strong>Nearby weather</strong><br /><span id="observationDescription">Fetching nearby weather from Open-Meteo.</span> Surface values represent a forecast grid point near the storm center, not a cyclone advisory.</p><p><strong>Satellite backdrop</strong><br />NASA GIBS MODIS corrected reflectance is requested for the previous UTC day. Coverage and acquisition times vary; NASA Blue Marble is the fallback.</p><p><strong>Physics and impact</strong><br />Python computes a Holland-type wind profile and sparse Open-Meteo global wind/current vectors. The 72-hour path and economic sensitivity are scenarios, not forecasts.</p></div></div>
+        </section>
+      </main>
+    </div>
+    <footer class="footer"><span>PAL / ATMOSPHERE LAB</span><span>FOR EXPLORATION & EDUCATION · NOT FOR EMERGENCY USE</span><a href="./README.md">DATA & METHODS ↗</a></footer>
+  </div>
+
+  <dialog id="stormDialog"><form method="dialog" id="stormForm"><div class="dialog-heading"><span class="panel-kicker">CREATE A SCENARIO</span><button type="button" id="closeDialog" aria-label="Close">×</button></div><h2>Make your own storm<span class="title-period">.</span></h2><p>Set a starting location and experiment with the controls.</p><label>STORM NAME<input id="customName" name="name" maxlength="28" placeholder="e.g. Project Helios" required /></label><div class="dialog-grid"><label>LATITUDE<input id="customLat" name="lat" type="number" min="-60" max="60" step="0.1" value="18.8" required /></label><label>LONGITUDE<input id="customLon" name="lon" type="number" min="-180" max="180" step="0.1" value="126.2" required /></label></div><button class="create-button" type="submit">CREATE STORM ↗</button></form></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
+

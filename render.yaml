@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: pal-physics
+    runtime: python
+    plan: free
+    buildCommand: python -m compileall backend
+    startCommand: python -m backend.server
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.9
+
