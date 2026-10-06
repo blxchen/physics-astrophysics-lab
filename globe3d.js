@@ -9,10 +9,9 @@ function point(lat, lon, altitude = 0) {
   return new THREE.Vector3(radius * Math.cos(phi) * Math.cos(lam), radius * Math.sin(phi), -radius * Math.cos(phi) * Math.sin(lam));
 }
 function yesterday() { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
-function nasaUrl(layer, date) {
+function nasaUrl(layer, date, width, format = 'image/jpeg') {
   const time = date ? `&TIME=${date}` : '';
-  const width = window.innerWidth >= 1400 ? 4096 : 2048;
-  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&FORMAT=image/jpeg&WIDTH=${width}&HEIGHT=${width / 2}&CRS=EPSG:4326&BBOX=-90,-180,90,180${time}`;
+  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&FORMAT=${format}&TRANSPARENT=TRUE&WIDTH=${width}&HEIGHT=${width / 2}&CRS=EPSG:4326&BBOX=-90,-180,90,180${time}`;
 }
 function buildStars() {
   const vertices = [];
@@ -48,27 +47,59 @@ export function createGlobe(canvas, state) {
   sun.position.set(4, 2, 5);
   scene.add(sun, buildStars());
 
-  const earth = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 96), new THREE.MeshStandardMaterial({ color: 0x4e8798, roughness: .95, metalness: 0 }));
+  const globeGeometry = new THREE.SphereGeometry(R, 192, 128);
+  const earth = new THREE.Mesh(globeGeometry, new THREE.MeshStandardMaterial({ color: 0x4e8798, roughness: .95, metalness: 0 }));
   scene.add(earth);
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
-  const applyTexture = (url, onFail) => loader.load(url, texture => {
+  const baseWidth = Math.min(renderer.capabilities.maxTextureSize, window.innerWidth >= 1400 ? 8192 : window.innerWidth >= 800 ? 4096 : 2048);
+  const observationWidth = Math.min(renderer.capabilities.maxTextureSize, window.innerWidth >= 1100 ? 4096 : 2048);
+  const imageLabel = document.getElementById('imageryDate');
+  let observationReady = false;
+  loader.load(nasaUrl('BlueMarble_NextGeneration', null, baseWidth), texture => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
     earth.material.map = texture;
     earth.material.color.setHex(0xffffff);
     earth.material.needsUpdate = true;
-    document.getElementById('imageryDate').textContent = url.includes('TIME=') ? yesterday() : 'NASA BLUE MARBLE';
-  }, undefined, onFail);
-  applyTexture(nasaUrl('MODIS_Terra_CorrectedReflectance_TrueColor', yesterday()), () => applyTexture(nasaUrl('BlueMarble_NextGeneration'), () => {
-    document.getElementById('imageryDate').textContent = 'TEXTURE UNAVAILABLE';
-  }));
+    if (!observationReady) imageLabel.textContent = `BLUE MARBLE ${baseWidth / 1024}K`;
+  }, undefined, () => { imageLabel.textContent = 'BASE IMAGERY UNAVAILABLE'; });
 
-  const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.065, 64, 48), new THREE.ShaderMaterial({
+  // Daily MODIS true color is a swath composite. Its no-data wedges are opaque
+  // black even when GIBS is asked for a transparent PNG, so derive an alpha mask.
+  // Blue Marble remains below every unobserved pixel.
+  const observation = new Image();
+  observation.crossOrigin = 'anonymous';
+  observation.onload = () => {
+    const imageCanvas = document.createElement('canvas');
+    imageCanvas.width = observation.naturalWidth;
+    imageCanvas.height = observation.naturalHeight;
+    const context = imageCanvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(observation, 0, 0);
+    const pixels = context.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
+    const rgba = pixels.data;
+    for (let i = 0; i < rgba.length; i += 4) {
+      const lightest = Math.max(rgba[i], rgba[i + 1], rgba[i + 2]);
+      // Feather compression edges while retaining dark, blue ocean pixels.
+      rgba[i + 3] = Math.min(rgba[i + 3], Math.round(255 * clamp((lightest - 9) / 24, 0, 1)));
+    }
+    context.putImageData(pixels, 0, 0);
+    const texture = new THREE.CanvasTexture(imageCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const overlay = new THREE.Mesh(new THREE.SphereGeometry(R + .0015, 192, 128), new THREE.MeshStandardMaterial({ map: texture, transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }));
+    scene.add(overlay);
+    observationReady = true;
+    imageLabel.textContent = `MODIS ${yesterday()} + BLUE MARBLE`;
+  };
+  observation.onerror = () => { if (imageLabel.textContent === 'LATEST AVAILABLE') imageLabel.textContent = 'BLUE MARBLE BASE'; };
+  observation.src = nasaUrl('MODIS_Terra_CorrectedReflectance_TrueColor', yesterday(), observationWidth, 'image/png');
+
+  const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.04, 64, 48), new THREE.ShaderMaterial({
     transparent: true, side: THREE.BackSide, depthWrite: false,
     uniforms: { glowColor: { value: new THREE.Color(0x4fcde1) } },
     vertexShader: 'varying vec3 vNormal; varying vec3 vView; void main(){ vec4 world = modelMatrix * vec4(position,1.0); vNormal = normalize(mat3(modelMatrix)*normal); vView = normalize(cameraPosition-world.xyz); gl_Position=projectionMatrix*viewMatrix*world; }',
-    fragmentShader: 'uniform vec3 glowColor; varying vec3 vNormal; varying vec3 vView; void main(){ float edge=pow(1.0-max(0.0,dot(normalize(vNormal),normalize(vView))),2.2); gl_FragColor=vec4(glowColor,edge*.65); }'
+    fragmentShader: 'uniform vec3 glowColor; varying vec3 vNormal; varying vec3 vView; void main(){ float edge=pow(1.0-max(0.0,dot(normalize(vNormal),normalize(vView))),2.2); gl_FragColor=vec4(glowColor,edge*.36); }'
   }));
   scene.add(atmosphere);
 

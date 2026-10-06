@@ -49,7 +49,7 @@ The curve is **not calibrated to real building inventories or vulnerability clas
 
 | Layer | Source | Meaning |
 | --- | --- | --- |
-| Earth texture | [NASA GIBS](https://www.earthdata.nasa.gov/data/tools/gibs) MODIS Terra corrected reflectance | Daily satellite backdrop requested for previous UTC day, not live video. Falls back to NASA Blue Marble. |
+| Earth texture | [NASA GIBS](https://www.earthdata.nasa.gov/data/tools/gibs) Blue Marble Next Generation and MODIS Terra corrected reflectance | Continuous Blue Marble base (up to 8K) with the previous UTC day's MODIS swaths (up to 4K) overlaid. Black no-data swaths are masked to reveal the base. Neither layer is live video. |
 | Nearby weather | [Open-Meteo Forecast API](https://open-meteo.com/en/docs) | Gridded hourly forecast at the selected coordinates, not cyclone center observations. |
 | Active Atlantic / eastern Pacific storms | [NOAA NHC CurrentStorms.json](https://www.nhc.noaa.gov/productexamples/) | Advisory center, wind, pressure, and motion retrieved by the Python API; no other basins implied. |
 | Radial profile and scenario track | `backend/physics.py` | Idealized physics output. Live NHC values become initial conditions only. |
